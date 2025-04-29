@@ -1,8 +1,0 @@
-log/mosquitto.log
-data/mosquitto.db
-
-log
-data
-
-.log
-.data
