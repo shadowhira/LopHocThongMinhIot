@@ -1,0 +1,243 @@
+// Thông tin service account và sheet ID
+const SERVICE_ACCOUNT_FILE = "ultra-physics-458303-t5-8079798c1a2c.json";
+const SPREADSHEET_ID = "1TKl9Zv5HLesK8vLozcb0613mZ2EA093zkz5JnM7UmXY";
+const SHEET_DANHSACH = "DANHSACH";
+const SHEET_DIEMDANH = "DIEMDANH";
+
+// Hàm khởi tạo kết nối với Google Sheet sử dụng service account
+function getSheetService() {
+  try {
+    // Đọc thông tin service account từ file JSON
+    const serviceAccount = JSON.parse(PropertiesService.getScriptProperties().getProperty("SERVICE_ACCOUNT") || "{}");
+
+    // Tạo JWT token để xác thực
+    const jwtToken = createJWT(serviceAccount);
+
+    // Lấy access token từ Google OAuth
+    const accessToken = getAccessToken(jwtToken);
+
+    return { accessToken: accessToken };
+  } catch (error) {
+    console.error("Lỗi khi khởi tạo kết nối: " + error);
+    return null;
+  }
+}
+
+// Tạo JWT token
+function createJWT(serviceAccount) {
+  const header = {
+    alg: "RS256",
+    typ: "JWT"
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+  const claim = {
+    iss: serviceAccount.client_email,
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now
+  };
+
+  const encodedHeader = Utilities.base64EncodeWebSafe(JSON.stringify(header));
+  const encodedClaim = Utilities.base64EncodeWebSafe(JSON.stringify(claim));
+  const signatureInput = encodedHeader + "." + encodedClaim;
+
+  const signature = Utilities.computeRsaSha256Signature(
+    signatureInput,
+    serviceAccount.private_key
+  );
+
+  const encodedSignature = Utilities.base64EncodeWebSafe(signature);
+
+  return signatureInput + "." + encodedSignature;
+}
+
+// Lấy access token từ Google OAuth
+function getAccessToken(jwt) {
+  const response = UrlFetchApp.fetch("https://oauth2.googleapis.com/token", {
+    method: "post",
+    payload: {
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt
+    }
+  });
+
+  const responseObj = JSON.parse(response.getContentText());
+  return responseObj.access_token;
+}
+
+// Hàm đọc dữ liệu từ Google Sheet
+function readSheetData(sheetName, range) {
+  const service = getSheetService();
+  if (!service) return null;
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${sheetName}!${range}`;
+  const response = UrlFetchApp.fetch(url, {
+    headers: {
+      Authorization: "Bearer " + service.accessToken
+    }
+  });
+
+  return JSON.parse(response.getContentText());
+}
+
+// Hàm ghi dữ liệu vào Google Sheet
+function appendToSheet(sheetName, values) {
+  const service = getSheetService();
+  if (!service) return false;
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${sheetName}!A:Z:append?valueInputOption=USER_ENTERED`;
+  const payload = {
+    values: [values]
+  };
+
+  const response = UrlFetchApp.fetch(url, {
+    method: "post",
+    headers: {
+      Authorization: "Bearer " + service.accessToken,
+      "Content-Type": "application/json"
+    },
+    payload: JSON.stringify(payload)
+  });
+
+  return JSON.parse(response.getContentText());
+}
+
+// Hàm khởi tạo - lưu thông tin service account vào Properties
+function initialize() {
+  try {
+    const serviceAccountFile = DriveApp.getFilesByName(SERVICE_ACCOUNT_FILE).next();
+    const serviceAccountContent = serviceAccountFile.getBlob().getDataAsString();
+    PropertiesService.getScriptProperties().setProperty("SERVICE_ACCOUNT", serviceAccountContent);
+    return "Khởi tạo thành công";
+  } catch (error) {
+    return "Lỗi khi khởi tạo: " + error;
+  }
+}
+
+// Hàm xử lý request
+function doGet(e) {
+  // Sử dụng SpreadsheetApp cho các tác vụ đơn giản (nếu có quyền)
+  var sheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet1 = sheet.getSheetByName(SHEET_DANHSACH);
+  var sheet2 = sheet.getSheetByName(SHEET_DIEMDANH);
+
+  var action = e.parameter.sts;
+  var response = {};
+
+  if (action == "read") {
+    var data = sheet1.getDataRange().getValues();
+    var result = [];
+
+    for (var i = 1; i < data.length; i++) { // Bỏ dòng tiêu đề
+      result.push(data[i][0]); // UID
+      result.push(data[i][0]); // Code (nếu khác UID thì cần sửa)
+      result.push(data[i][1]); // Name
+    }
+
+    return ContentService.createTextOutput(result.join(",")).setMimeType(ContentService.MimeType.TEXT);
+  }
+  else if (action == "writeuid") {
+    var rfid = e.parameter.uid;
+    var data = sheet1.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] == rfid) {
+        response.status = "error";
+        response.message = "Thẻ đã tồn tại";
+        return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    // Sử dụng API để ghi dữ liệu
+    try {
+      appendToSheet(SHEET_DANHSACH, [rfid, "Tên mới"]);
+      response.status = "success";
+      response.message = "Đăng ký thành công";
+    } catch (error) {
+      response.status = "error";
+      response.message = "Lỗi khi đăng ký: " + error;
+    }
+
+    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+  }
+  else if (action == "writelog") {
+    var uid = e.parameter.uid;
+    var name = e.parameter.name || "";
+    var inout = e.parameter.inout || "";
+    var date = new Date();
+    var time = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm:ss");
+    var today = Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+    // Tìm tên người dùng nếu không được cung cấp
+    if (!name && uid) {
+      try {
+        var userData = readSheetData(SHEET_DANHSACH, "A:B");
+        if (userData && userData.values) {
+          for (var i = 1; i < userData.values.length; i++) {
+            if (userData.values[i][0] == uid) {
+              name = userData.values[i][1];
+              break;
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Lỗi khi tìm tên người dùng: " + error);
+      }
+    }
+
+    // Ghi log điểm danh
+    try {
+      appendToSheet(SHEET_DIEMDANH, [today, time, uid, name, inout]);
+      response.status = "success";
+      response.message = "Ghi log thành công";
+    } catch (error) {
+      response.status = "error";
+      response.message = "Lỗi khi ghi log: " + error;
+    }
+
+    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+  }
+  else if (action == "init") {
+    var result = initialize();
+    response.status = "success";
+    response.message = result;
+    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+  }
+  else if (action == "batchlog") {
+    // Ghi log hàng loạt
+    var logData = e.parameter.data;
+    if (!logData) {
+      response.status = "error";
+      response.message = "Không có dữ liệu";
+      return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    try {
+      var logs = JSON.parse(logData);
+      var successCount = 0;
+
+      for (var i = 0; i < logs.length; i++) {
+        var log = logs[i];
+        var date = new Date(log.timestamp || Date.now());
+        var time = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm:ss");
+        var today = Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+        appendToSheet(SHEET_DIEMDANH, [today, time, log.uid, log.name || "", log.inout || ""]);
+        successCount++;
+      }
+
+      response.status = "success";
+      response.message = "Đã ghi " + successCount + " bản ghi";
+    } catch (error) {
+      response.status = "error";
+      response.message = "Lỗi khi ghi log hàng loạt: " + error;
+    }
+
+    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  response.status = "error";
+  response.message = "Hành động không hợp lệ";
+  return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+}

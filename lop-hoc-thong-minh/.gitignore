@@ -1,3 +1,93 @@
-/hardware-simulator/node_modules
-/hardware-simulator/.env
+# Global ignores
+.DS_Store
+*.log
+logs/
+*.tmp
+*.temp
+.cache/
+tmp/
+
+# Node.js dependencies
+node_modules/
+*/node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+.pnpm-debug.log
+
+# Environment variables and credentials
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+!.env.example
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+
+# Testing
+coverage/
+__tests__/coverage/
+
+#-----------------------------------------
+# Mobile App specific ignores
+#-----------------------------------------
+# Expo
+/mobile-app/.expo/
+/mobile-app/.expo/devices.json
+/mobile-app/.expo/metro/
+/mobile-app/.expo/README.md
+/mobile-app/.expo-shared/
+/mobile-app/web-build/
+/mobile-app/dist/
+
+# React Native
+/mobile-app/*.jks
+/mobile-app/*.p8
+/mobile-app/*.p12
+/mobile-app/*.key
+/mobile-app/*.mobileprovision
+/mobile-app/*.orig.*
+
+# Build files
+/mobile-app/build/
+/mobile-app/ios/build/
+/mobile-app/android/app/build/
+/mobile-app/android/build/
+/mobile-app/android/.gradle/
+/mobile-app/ios/Pods/
+
+# TypeScript
+/mobile-app/*.tsbuildinfo
+
+# Generated files
+/mobile-app/.watchmanconfig
+/mobile-app/metro.config.js.generated
+
+#-----------------------------------------
+# Hardware Simulator specific ignores
+#-----------------------------------------
+# Credentials and sensitive data
+/hardware-simulator/credentials/
+/hardware-simulator/credentials/*.json
 /hardware-simulator/credentials/service-account.json
+
+# Firebase
+firebase-debug.log
+ui-debug.log
+.firebase/
+
+# Build output
+/hardware-simulator/build/
+/hardware-simulator/dist/
+
+# Debug files
+/hardware-simulator/debug/

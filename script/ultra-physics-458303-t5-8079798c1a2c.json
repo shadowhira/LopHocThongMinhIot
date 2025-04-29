@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "ultra-physics-458303-t5",
+  "private_key_id": "8079798c1a2cfd80e1700a9aa96e606dca843a7b",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCv7515K9cct8CB\n0fdLxxyhYAhTR9OhPA0r5O1AhX4j/h774dGrt3uQ8dyFmI74OhoU8pWc9o/tsgEw\n1ZUBObVLXNNKxiFpfyApmkjZ2L2RAdKV6NMWyraFYQs7vm8UvI9pWPXe4uXPrF68\nnNZAsS8oJd/0FeW7EoLS4nDKkTHoItcScj2Od8/K+RtaE8mXheKOdDJurqgpernk\n9rBP4R/HXQNsK4fdlatWv+ONJKIcXLDJlBanpCLV+z4KnxNFcwf6WzTmw/3nuaQb\n8H3gU3RsWGNSfyKRNTZyuGyRiPNQIrsZJS4MUF6mAWbJcwZN8/1UXV36YzN8839i\nYQnPIayxAgMBAAECggEAATLS5K5ikSQO0YuVwXxGIt13EmMq6x5QEX3GIH0Fp0GI\nokBknQ9Qo2PZvoa+fZd+vJMLp3W2CgwJrknxhuA8OWV/h9LqS3AluXwptXiLT7je\nlNhw0gb4P+0cRkWgNy4oKh3EfLEuGIW09lhkAhg66SKl6uFNzvdmW6urfJ5z2QrF\n0lZHYMD1MxEHaemELxBoM3ZX98fXIjtNtRYOJD1i9RqZZnng1hNtY/EwSY1IBWjY\nFulHSXZMvTT+vz4O3u6c18EIqIqMMoAYodfs5W9f+PWS3LbwTzGpm8vZhXcbX14X\nkZrd093IUqj/RNK2JW6DHPTDV5fUuAY9hd71pZnJQQKBgQDhStD+dnUf1+i2KGBg\niEO6CydhV7LnpF+2nZy2TgajcpikMltgT7fh009Mw5v4cEiGsLcIhmlqCh6ydQeV\nwvkn8B434i9MahN83zY+n2cM34wAzydcEGwDBo9YFIIBVsaELX5jy0dvM99/7tCV\nZrIJ6XMYQKqJAEcttMX0ynY1EQKBgQDH6pj54ne8YhPSuUddWrRHylo2V+lhb/MT\nrxUJraSRgTJ2dAVZfYRCn7TJrp3D3hb79YgaGt9K0ZrGFBc/A7dJXArp6MWtkaU3\nlwFa1UFSKpnJ91sbRDyLP4373dWnbC4p9CuSPNzFPPUAi5BrnOMrpzF9Z288Ko6F\n13licNF9oQKBgB/0zNBLXTG3Hns4HvOSYIjzLBLSrb3NwwXUNXZmeuqURrKDshJn\nPF376zOoS2diBeeVCWFcL3erF8+YagsELPNNS/wBSVQ9d6YuwzL+yU86JlG3EI4u\nhiOnuo1z2zz1YhM9oL/nBarwYLN03IFUn8xoILs/8PCd6XrCOZIPZdUBAoGAdLpc\nG/vJoes6W93m93FQtmJGjliCYmw1aBbgl8gVwQfI6TURMpGBOk16CBC2+Xihvvg8\nQdHS8yKz1lhAwoBu8pyVmsJZOeFCsNSw69J803cgWLbfMWqEV2ICiz+Z0qntwn1Z\nO4fh+CCBhZH3/32ZfxGeafSNFHpcwXVw4LOy/kECgYEAxRNPjAEW3+tEV8pmX2cX\nv3nb65whHSu587EI5Oz9r0qkOg3zV/a7cSE01gtTX2Bf0yD+Rnj+uXTKbYlJ0zbQ\n3yPdZJjHC2+OI9rx9w5+4SIR13mOoVMvwRt9bgnsBRD9WPi201ULHQURkvGtujKK\n+ACkk5rZRNzoKslDB6FgnKg=\n-----END PRIVATE KEY-----\n",
+  "client_email": "doantotnghiep@ultra-physics-458303-t5.iam.gserviceaccount.com",
+  "client_id": "114739882533496256573",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/doantotnghiep%40ultra-physics-458303-t5.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

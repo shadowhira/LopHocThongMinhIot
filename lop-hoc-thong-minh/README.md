@@ -12,7 +12,7 @@ Dự án này xây dựng một hệ thống lớp học thông minh sử dụng
 ```
 lop-hoc-thong-minh/
 ├── hardware-simulator/     # Script giả lập phần cứng ESP32
-├── mobile-app/             # Ứng dụng di động React Native Expo (sẽ phát triển sau)
+├── mobile-app/             # Ứng dụng di động React Native Expo
 └── plan.md                 # Kế hoạch triển khai dự án
 ```
 
@@ -134,8 +134,49 @@ Script giả lập cung cấp một giao diện dòng lệnh tương tác với 
    - Cập nhật ngẫu nhiên giá trị cảm biến mỗi 5 giây
    - Xử lý logic tự động (bật đèn khi phát hiện chuyển động, cảnh báo khi phát hiện lửa hoặc khí gas cao)
 
+## Hướng dẫn sử dụng ứng dụng di động
+
+Ứng dụng di động React Native Expo cho phép bạn theo dõi và điều khiển lớp học thông minh từ xa.
+
+### Yêu cầu
+
+- Node.js (v14 trở lên)
+- Expo CLI
+- Tài khoản Firebase (cùng với script giả lập)
+
+### Cài đặt và chạy
+
+1. Di chuyển vào thư mục ứng dụng di động:
+   ```bash
+   cd lop-hoc-thong-minh/mobile-app
+   ```
+
+2. Cài đặt các gói phụ thuộc:
+   ```bash
+   npm install
+   ```
+
+3. Cập nhật cấu hình Firebase:
+   - Mở file `src/config/firebase.ts`
+   - Thay thế thông tin cấu hình Firebase của bạn (cùng với cấu hình đã sử dụng cho script giả lập)
+
+4. Chạy ứng dụng:
+   ```bash
+   npm start
+   ```
+
+5. Sử dụng Expo Go trên thiết bị di động để quét mã QR hoặc chạy trên máy ảo.
+
+### Tính năng chính
+
+- **Trang chủ**: Hiển thị thống kê điểm danh, thông số môi trường và điều khiển thiết bị
+- **Điểm danh**: Xem danh sách điểm danh theo ngày
+- **Sinh viên**: Xem và tìm kiếm danh sách sinh viên
+- **Cài đặt**: Cấu hình ứng dụng và xem thông tin
+
+Để biết thêm chi tiết, vui lòng xem file README.md trong thư mục mobile-app.
+
 ## Các bước tiếp theo
 
-- Phát triển ứng dụng di động React Native Expo
 - Tích hợp và kiểm thử hệ thống
 - Chuyển đổi sang phần cứng thật (ESP32)
