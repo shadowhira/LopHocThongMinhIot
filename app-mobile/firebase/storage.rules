@@ -1,0 +1,40 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Cho phép đọc hình ảnh công khai
+    match /public/{allPaths=**} {
+      allow read;
+      allow write: if request.auth != null;
+    }
+    
+    // Hình ảnh người dùng
+    match /users/{userId}/{allPaths=**} {
+      allow read;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Hình ảnh không gian/cộng đồng
+    match /spaces/{spaceId}/{allPaths=**} {
+      allow read;
+      allow write: if request.auth != null && 
+        (exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid)).data.role == "admin");
+    }
+    
+    // Hình ảnh bài đăng
+    match /posts/{postId}/{allPaths=**} {
+      allow read;
+      allow write: if request.auth != null && 
+        exists(/databases/$(database)/documents/posts/$(postId)) &&
+        get(/databases/$(database)/documents/posts/$(postId)).data.authorId == request.auth.uid;
+    }
+    
+    // Hình ảnh sự kiện
+    match /events/{eventId}/{allPaths=**} {
+      allow read;
+      allow write: if request.auth != null && 
+        exists(/databases/$(database)/documents/events/$(eventId)) &&
+        get(/databases/$(database)/documents/events/$(eventId)).data.createdBy == request.auth.uid;
+    }
+  }
+}
