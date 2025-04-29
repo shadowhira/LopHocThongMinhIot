@@ -1,0 +1,3 @@
+/hardware-simulator/node_modules
+/hardware-simulator/.env
+/hardware-simulator/credentials/service-account.json
