@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Switch, TouchableOpacity } from 'react-native';
 import { Card, Title } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Devices } from '../types';
+import { useTheme } from '../theme/ThemeContext';
 
 interface DeviceControlProps {
   devices: Devices;
@@ -17,108 +18,215 @@ const DeviceControl: React.FC<DeviceControlProps> = ({
   onLightControl,
   onAutoModeToggle,
 }) => {
+  // Sử dụng theme từ context
+  const { theme } = useTheme();
+
   const { door, light } = devices;
-  
+
   return (
-    <Card style={styles.card}>
+    <Card style={{
+      marginVertical: 10,
+      marginHorizontal: 16,
+      elevation: 4,
+      backgroundColor: theme.card,
+    }}>
       <Card.Content>
-        <Title style={styles.title}>Điều khiển thiết bị</Title>
-        
+        <Title style={{
+          fontSize: 18,
+          fontWeight: 'bold',
+          marginBottom: 15,
+          color: theme.text.primary,
+        }}>Điều khiển thiết bị</Title>
+
         {/* Điều khiển cửa */}
-        <View style={styles.deviceSection}>
-          <View style={styles.deviceHeader}>
-            <MaterialCommunityIcons 
-              name="door" 
-              size={24} 
-              color="#2196F3" 
+        <View style={{
+          marginBottom: 20,
+        }}>
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginBottom: 10,
+          }}>
+            <MaterialCommunityIcons
+              name="door"
+              size={24}
+              color={theme.door}
             />
-            <Text style={styles.deviceName}>Cửa</Text>
-            <View style={styles.statusContainer}>
-              <Text style={[
-                styles.statusText, 
-                { color: door.status === 'open' ? '#4CAF50' : '#F44336' }
-              ]}>
+            <Text style={{
+              fontSize: 16,
+              fontWeight: 'bold',
+              marginLeft: 10,
+              color: theme.text.primary,
+            }}>Cửa</Text>
+            <View style={{
+              flex: 1,
+              alignItems: 'flex-end',
+            }}>
+              <Text style={{
+                fontWeight: 'bold',
+                color: door.status === 'open' ? theme.success : theme.error,
+              }}>
                 {door.status === 'open' ? 'Đang mở' : 'Đang đóng'}
               </Text>
             </View>
           </View>
-          
-          <View style={styles.controlRow}>
-            <Text style={styles.autoText}>Chế độ tự động:</Text>
+
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 10,
+          }}>
+            <Text style={{
+              fontSize: 14,
+              color: theme.text.primary,
+            }}>Chế độ tự động:</Text>
             <Switch
               value={door.auto}
               onValueChange={(value) => onAutoModeToggle('door', value)}
-              trackColor={{ false: '#767577', true: '#81b0ff' }}
-              thumbColor={door.auto ? '#2196F3' : '#f4f3f4'}
+              trackColor={{ false: theme.switch.track.inactive, true: theme.switch.track.active }}
+              thumbColor={door.auto ? theme.switch.thumb.active : theme.switch.thumb.inactive}
             />
           </View>
-          
+
           {!door.auto && (
-            <View style={styles.buttonContainer}>
+            <View style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+            }}>
               <TouchableOpacity
-                style={[styles.button, { backgroundColor: '#4CAF50' }]}
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  borderRadius: 5,
+                  alignItems: 'center',
+                  marginHorizontal: 5,
+                  backgroundColor: theme.success,
+                  opacity: door.status === 'open' ? 0.5 : 1,
+                }}
                 onPress={() => onDoorControl('open')}
                 disabled={door.status === 'open'}
               >
-                <Text style={styles.buttonText}>Mở cửa</Text>
+                <Text style={{
+                  color: 'white',
+                  fontWeight: 'bold',
+                }}>Mở cửa</Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
-                style={[styles.button, { backgroundColor: '#F44336' }]}
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  borderRadius: 5,
+                  alignItems: 'center',
+                  marginHorizontal: 5,
+                  backgroundColor: theme.error,
+                  opacity: door.status === 'closed' ? 0.5 : 1,
+                }}
                 onPress={() => onDoorControl('closed')}
                 disabled={door.status === 'closed'}
               >
-                <Text style={styles.buttonText}>Đóng cửa</Text>
+                <Text style={{
+                  color: 'white',
+                  fontWeight: 'bold',
+                }}>Đóng cửa</Text>
               </TouchableOpacity>
             </View>
           )}
         </View>
-        
+
         {/* Điều khiển đèn */}
-        <View style={styles.deviceSection}>
-          <View style={styles.deviceHeader}>
-            <MaterialCommunityIcons 
-              name="lightbulb" 
-              size={24} 
-              color={light.status === 'on' ? '#FFC107' : '#757575'} 
+        <View style={{
+          marginBottom: 20,
+        }}>
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginBottom: 10,
+          }}>
+            <MaterialCommunityIcons
+              name="lightbulb"
+              size={24}
+              color={light.status === 'on' ? theme.light.on : theme.light.off}
             />
-            <Text style={styles.deviceName}>Đèn</Text>
-            <View style={styles.statusContainer}>
-              <Text style={[
-                styles.statusText, 
-                { color: light.status === 'on' ? '#4CAF50' : '#F44336' }
-              ]}>
+            <Text style={{
+              fontSize: 16,
+              fontWeight: 'bold',
+              marginLeft: 10,
+              color: theme.text.primary,
+            }}>Đèn</Text>
+            <View style={{
+              flex: 1,
+              alignItems: 'flex-end',
+            }}>
+              <Text style={{
+                fontWeight: 'bold',
+                color: light.status === 'on' ? theme.success : theme.error,
+              }}>
                 {light.status === 'on' ? 'Đang bật' : 'Đang tắt'}
               </Text>
             </View>
           </View>
-          
-          <View style={styles.controlRow}>
-            <Text style={styles.autoText}>Chế độ tự động:</Text>
+
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 10,
+          }}>
+            <Text style={{
+              fontSize: 14,
+              color: theme.text.primary,
+            }}>Chế độ tự động:</Text>
             <Switch
               value={light.auto}
               onValueChange={(value) => onAutoModeToggle('light', value)}
-              trackColor={{ false: '#767577', true: '#81b0ff' }}
-              thumbColor={light.auto ? '#2196F3' : '#f4f3f4'}
+              trackColor={{ false: theme.switch.track.inactive, true: theme.switch.track.active }}
+              thumbColor={light.auto ? theme.switch.thumb.active : theme.switch.thumb.inactive}
             />
           </View>
-          
+
           {!light.auto && (
-            <View style={styles.buttonContainer}>
+            <View style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+            }}>
               <TouchableOpacity
-                style={[styles.button, { backgroundColor: '#4CAF50' }]}
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  borderRadius: 5,
+                  alignItems: 'center',
+                  marginHorizontal: 5,
+                  backgroundColor: theme.success,
+                  opacity: light.status === 'on' ? 0.5 : 1,
+                }}
                 onPress={() => onLightControl('on')}
                 disabled={light.status === 'on'}
               >
-                <Text style={styles.buttonText}>Bật đèn</Text>
+                <Text style={{
+                  color: 'white',
+                  fontWeight: 'bold',
+                }}>Bật đèn</Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
-                style={[styles.button, { backgroundColor: '#F44336' }]}
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  borderRadius: 5,
+                  alignItems: 'center',
+                  marginHorizontal: 5,
+                  backgroundColor: theme.error,
+                  opacity: light.status === 'off' ? 0.5 : 1,
+                }}
                 onPress={() => onLightControl('off')}
                 disabled={light.status === 'off'}
               >
-                <Text style={styles.buttonText}>Tắt đèn</Text>
+                <Text style={{
+                  color: 'white',
+                  fontWeight: 'bold',
+                }}>Tắt đèn</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -128,61 +236,6 @@ const DeviceControl: React.FC<DeviceControlProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  card: {
-    marginVertical: 10,
-    marginHorizontal: 16,
-    elevation: 4,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
-  },
-  deviceSection: {
-    marginBottom: 20,
-  },
-  deviceHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  deviceName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginLeft: 10,
-  },
-  statusContainer: {
-    flex: 1,
-    alignItems: 'flex-end',
-  },
-  statusText: {
-    fontWeight: 'bold',
-  },
-  controlRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  autoText: {
-    fontSize: 14,
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 5,
-    alignItems: 'center',
-    marginHorizontal: 5,
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
-});
+// Styles đã được chuyển sang inline styles với theme
 
 export default DeviceControl;

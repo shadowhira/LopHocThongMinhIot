@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, FlatList } from 'react-native';
 import { Card, Title, Divider } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AttendanceRecord } from '../types';
+import { useTheme } from '../theme/ThemeContext';
 
 interface AttendanceListProps {
   records: AttendanceRecord[];
@@ -10,21 +11,24 @@ interface AttendanceListProps {
 }
 
 const AttendanceList: React.FC<AttendanceListProps> = ({ records, date }) => {
+  // Sử dụng theme từ context
+  const { theme } = useTheme();
+
   // Định dạng ngày hiển thị (từ YYYYMMDD sang DD/MM/YYYY)
   const formattedDate = `${date.substring(6, 8)}/${date.substring(4, 6)}/${date.substring(0, 4)}`;
-  
+
   // Hàm render item
   const renderItem = ({ item }: { item: AttendanceRecord }) => {
     // Xác định màu sắc trạng thái
     const getStatusColor = (status: string) => {
       switch (status) {
-        case 'present': return '#4CAF50';
-        case 'absent': return '#F44336';
-        case 'late': return '#FF9800';
-        default: return '#757575';
+        case 'present': return theme.success;
+        case 'absent': return theme.error;
+        case 'late': return theme.warning;
+        default: return theme.text.disabled;
       }
     };
-    
+
     // Xác định icon trạng thái
     const getStatusIcon = (status: string) => {
       switch (status) {
@@ -34,7 +38,7 @@ const AttendanceList: React.FC<AttendanceListProps> = ({ records, date }) => {
         default: return 'help-circle';
       }
     };
-    
+
     // Xác định text trạng thái
     const getStatusText = (status: string) => {
       switch (status) {
@@ -44,47 +48,107 @@ const AttendanceList: React.FC<AttendanceListProps> = ({ records, date }) => {
         default: return 'Không xác định';
       }
     };
-    
+
     const statusColor = getStatusColor(item.status);
     const statusIcon = getStatusIcon(item.status);
     const statusText = getStatusText(item.status);
-    
+
     return (
-      <View style={styles.itemContainer}>
-        <View style={styles.studentInfo}>
-          <Text style={styles.studentName}>{item.studentName}</Text>
-          <Text style={styles.rfidId}>RFID: {item.rfidId}</Text>
+      <View style={{
+        marginBottom: 10,
+      }}>
+        <View style={{
+          marginBottom: 5,
+        }}>
+          <Text style={{
+            fontSize: 16,
+            fontWeight: 'bold',
+            color: theme.text.primary,
+          }}>{item.studentName}</Text>
+          <Text style={{
+            fontSize: 12,
+            color: theme.text.secondary,
+          }}>RFID: {item.rfidId}</Text>
         </View>
-        
-        <View style={styles.attendanceInfo}>
-          <View style={styles.timeContainer}>
-            <Text style={styles.timeLabel}>Vào:</Text>
-            <Text style={styles.timeValue}>{item.timeIn || '---'}</Text>
+
+        <View style={{
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          marginVertical: 5,
+        }}>
+          <View style={{
+            flexDirection: 'row',
+          }}>
+            <Text style={{
+              fontSize: 14,
+              marginRight: 5,
+              color: theme.text.primary,
+            }}>Vào:</Text>
+            <Text style={{
+              fontSize: 14,
+              fontWeight: 'bold',
+              color: theme.text.primary,
+            }}>{item.timeIn || '---'}</Text>
           </View>
-          
-          <View style={styles.timeContainer}>
-            <Text style={styles.timeLabel}>Ra:</Text>
-            <Text style={styles.timeValue}>{item.timeOut || '---'}</Text>
+
+          <View style={{
+            flexDirection: 'row',
+          }}>
+            <Text style={{
+              fontSize: 14,
+              marginRight: 5,
+              color: theme.text.primary,
+            }}>Ra:</Text>
+            <Text style={{
+              fontSize: 14,
+              fontWeight: 'bold',
+              color: theme.text.primary,
+            }}>{item.timeOut || '---'}</Text>
           </View>
-          
-          <View style={styles.statusContainer}>
+
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+          }}>
             <MaterialCommunityIcons name={statusIcon} size={16} color={statusColor} />
-            <Text style={[styles.statusText, { color: statusColor }]}>{statusText}</Text>
+            <Text style={{
+              fontSize: 14,
+              fontWeight: 'bold',
+              marginLeft: 5,
+              color: statusColor,
+            }}>{statusText}</Text>
           </View>
         </View>
-        
-        <Divider style={styles.divider} />
+
+        <Divider style={{
+          marginTop: 10,
+          backgroundColor: theme.border,
+        }} />
       </View>
     );
   };
-  
+
   return (
-    <Card style={styles.card}>
+    <Card style={{
+      marginVertical: 10,
+      marginHorizontal: 16,
+      elevation: 4,
+      backgroundColor: theme.card,
+    }}>
       <Card.Content>
-        <Title style={styles.title}>Điểm danh ngày {formattedDate}</Title>
-        
+        <Title style={{
+          fontSize: 18,
+          fontWeight: 'bold',
+          marginBottom: 15,
+          color: theme.text.primary,
+        }}>Điểm danh ngày {formattedDate}</Title>
+
         {records.length === 0 ? (
-          <Text style={styles.emptyText}>Không có dữ liệu điểm danh</Text>
+          <Text style={{
+            textAlign: 'center',
+            marginVertical: 20,
+            color: theme.text.secondary,
+          }}>Không có dữ liệu điểm danh</Text>
         ) : (
           <FlatList
             data={records}
@@ -98,64 +162,6 @@ const AttendanceList: React.FC<AttendanceListProps> = ({ records, date }) => {
   );
 };
 
-const styles = StyleSheet.create({
-  card: {
-    marginVertical: 10,
-    marginHorizontal: 16,
-    elevation: 4,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
-  },
-  itemContainer: {
-    marginBottom: 10,
-  },
-  studentInfo: {
-    marginBottom: 5,
-  },
-  studentName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  rfidId: {
-    fontSize: 12,
-    color: '#757575',
-  },
-  attendanceInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginVertical: 5,
-  },
-  timeContainer: {
-    flexDirection: 'row',
-  },
-  timeLabel: {
-    fontSize: 14,
-    marginRight: 5,
-  },
-  timeValue: {
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginLeft: 5,
-  },
-  divider: {
-    marginTop: 10,
-  },
-  emptyText: {
-    textAlign: 'center',
-    marginVertical: 20,
-    color: '#757575',
-  },
-});
+// Styles đã được chuyển sang inline styles với theme
 
 export default AttendanceList;

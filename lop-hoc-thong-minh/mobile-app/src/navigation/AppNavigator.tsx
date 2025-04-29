@@ -1,7 +1,8 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useTheme } from '../theme/ThemeContext';
 
 // Screens
 import HomeScreen from '../screens/HomeScreen';
@@ -12,15 +13,43 @@ import SettingsScreen from '../screens/SettingsScreen';
 const Tab = createBottomTabNavigator();
 
 const AppNavigator: React.FC = () => {
+  // Sử dụng theme từ context
+  const { theme, isDarkMode } = useTheme();
+
+  // Tạo theme cho Navigation Container
+  const navigationTheme = isDarkMode ? {
+    ...DarkTheme,
+    colors: {
+      ...DarkTheme.colors,
+      primary: theme.primary,
+      background: theme.background,
+      card: theme.card,
+      text: theme.text.primary,
+      border: theme.border,
+    }
+  } : {
+    ...DefaultTheme,
+    colors: {
+      ...DefaultTheme.colors,
+      primary: theme.primary,
+      background: theme.background,
+      card: theme.card,
+      text: theme.text.primary,
+      border: theme.border,
+    }
+  };
+
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navigationTheme}>
       <Tab.Navigator
         screenOptions={{
-          tabBarActiveTintColor: '#2196F3',
-          tabBarInactiveTintColor: '#757575',
+          tabBarActiveTintColor: theme.tab.active,
+          tabBarInactiveTintColor: theme.tab.inactive,
           tabBarStyle: {
             paddingBottom: 5,
             paddingTop: 5,
+            backgroundColor: theme.tab.background,
+            borderTopColor: theme.border,
           },
           headerShown: false,
         }}
@@ -35,7 +64,7 @@ const AppNavigator: React.FC = () => {
             ),
           }}
         />
-        
+
         <Tab.Screen
           name="Attendance"
           component={AttendanceScreen}
@@ -46,7 +75,7 @@ const AppNavigator: React.FC = () => {
             ),
           }}
         />
-        
+
         <Tab.Screen
           name="Students"
           component={StudentsScreen}
@@ -57,7 +86,7 @@ const AppNavigator: React.FC = () => {
             ),
           }}
         />
-        
+
         <Tab.Screen
           name="Settings"
           component={SettingsScreen}
