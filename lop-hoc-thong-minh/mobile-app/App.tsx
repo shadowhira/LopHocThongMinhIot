@@ -1,13 +1,21 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Provider as PaperProvider, MD3DarkTheme, MD3LightTheme } from 'react-native-paper';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
+import { AlertProvider } from './src/context/AlertContext';
+import AlertBanner from './src/components/AlertBanner';
+import { configureNotifications } from './src/services/notificationService';
 
 // Wrapper component để sử dụng theme từ context
 const AppContent = () => {
   const { isDarkMode } = useTheme();
+
+  // Cấu hình thông báo khi component mount
+  useEffect(() => {
+    configureNotifications();
+  }, []);
 
   // Chọn theme cho Paper Provider dựa vào dark mode
   const paperTheme = isDarkMode ? MD3DarkTheme : MD3LightTheme;
@@ -24,7 +32,9 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <AppContent />
+        <AlertProvider>
+          <AppContent />
+        </AlertProvider>
       </ThemeProvider>
     </SafeAreaProvider>
   );

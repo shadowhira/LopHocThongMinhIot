@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
-import { useSensors } from '../hooks/useSensors';
+import { useSensors, simulateAlertCondition } from '../hooks/useSensors';
 import { useDevices } from '../hooks/useDevices';
 import { useAttendanceStats } from '../hooks/useAttendance';
 import SensorCard from '../components/SensorCard';
@@ -9,6 +9,8 @@ import AttendanceStats from '../components/AttendanceStats';
 import LoadingIndicator from '../components/LoadingIndicator';
 import ErrorMessage from '../components/ErrorMessage';
 import { useTheme } from '../theme/ThemeContext';
+import { Button } from 'react-native-paper';
+import { useAlerts } from '../context/AlertContext';
 
 const HomeScreen: React.FC = () => {
   const [refreshing, setRefreshing] = React.useState(false);
@@ -16,8 +18,41 @@ const HomeScreen: React.FC = () => {
   // Sử dụng theme từ context
   const { theme } = useTheme();
 
+  // Sử dụng alerts context
+  const { addAlert } = useAlerts();
+
   // Lấy dữ liệu cảm biến
   const { sensorData, loading: sensorsLoading, error: sensorsError } = useSensors();
+
+  // Hàm mô phỏng cảnh báo
+  const simulateAlert = (type: 'gas' | 'flame' | 'temperature') => {
+    const data = simulateAlertCondition(type);
+
+    // Tạo cảnh báo tương ứng
+    switch (type) {
+      case 'gas':
+        addAlert({
+          type: 'gas',
+          message: 'Nồng độ khí gas nguy hiểm',
+          value: data.gas
+        });
+        break;
+      case 'flame':
+        addAlert({
+          type: 'flame',
+          message: 'Phát hiện lửa trong lớp học',
+          value: true
+        });
+        break;
+      case 'temperature':
+        addAlert({
+          type: 'temperature',
+          message: 'Nhiệt độ cao bất thường',
+          value: data.temperature
+        });
+        break;
+    }
+  };
 
   // Lấy trạng thái thiết bị
   const {
@@ -79,6 +114,36 @@ const HomeScreen: React.FC = () => {
 
       {/* Thông số cảm biến */}
       <SensorCard sensorData={sensorData} />
+
+      {/* Nút mô phỏng cảnh báo - chỉ để kiểm tra */}
+      <View style={{
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginHorizontal: 16,
+        marginVertical: 10
+      }}>
+        <Button
+          mode="contained"
+          onPress={() => simulateAlert('gas')}
+          style={{ flex: 1, marginRight: 5, backgroundColor: theme.error }}
+        >
+          Mô phỏng Gas
+        </Button>
+        <Button
+          mode="contained"
+          onPress={() => simulateAlert('flame')}
+          style={{ flex: 1, marginHorizontal: 5, backgroundColor: theme.flame }}
+        >
+          Mô phỏng Lửa
+        </Button>
+        <Button
+          mode="contained"
+          onPress={() => simulateAlert('temperature')}
+          style={{ flex: 1, marginLeft: 5, backgroundColor: theme.warning }}
+        >
+          Mô phỏng Nhiệt
+        </Button>
+      </View>
 
       {/* Điều khiển thiết bị */}
       <DeviceControl

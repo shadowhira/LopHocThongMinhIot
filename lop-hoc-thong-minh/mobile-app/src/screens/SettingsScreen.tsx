@@ -1,11 +1,25 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Linking, Alert } from 'react-native';
-import { List, Divider, Switch } from 'react-native-paper';
+import { List, Divider, Switch, Badge } from 'react-native-paper';
+import { useNavigation, NavigationProp } from '@react-navigation/native';
 import { useTheme } from '../theme/ThemeContext';
+import { useAlerts } from '../context/AlertContext';
+
+// Định nghĩa kiểu cho navigation
+type RootStackParamList = {
+  SettingsMain: undefined;
+  AlertHistory: undefined;
+};
 
 const SettingsScreen: React.FC = () => {
   // Sử dụng theme từ context
   const { theme, isDarkMode, toggleTheme } = useTheme();
+
+  // Sử dụng alerts context
+  const { unreadCount } = useAlerts();
+
+  // Sử dụng navigation
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
 
   // State cho các cài đặt
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
@@ -84,6 +98,29 @@ const SettingsScreen: React.FC = () => {
               thumbColor={notificationsEnabled ? theme.switch.thumb.active : theme.switch.thumb.inactive}
             />
           )}
+        />
+
+        <Divider />
+
+        <List.Item
+          title="Lịch sử cảnh báo"
+          description="Xem các cảnh báo đã nhận"
+          left={props => <List.Icon {...props} icon="alert-circle" />}
+          right={props => unreadCount > 0 && (
+            <Badge
+              size={24}
+              style={{
+                backgroundColor: theme.error,
+                color: 'white',
+                fontWeight: 'bold',
+                marginRight: 8,
+                marginTop: 8,
+              }}
+            >
+              {unreadCount}
+            </Badge>
+          )}
+          onPress={() => navigation.navigate('AlertHistory')}
         />
 
         <Divider />
