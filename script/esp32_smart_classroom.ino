@@ -11,6 +11,7 @@
 #include <DHT.h>
 #include <math.h>
 #include <ESP32Servo.h>
+#include "time.h"
 
 // --- Khai báo chân kết nối ---
 #define SS_PIN 5
@@ -21,16 +22,26 @@
 #define MQ2_PIN 32
 #define DHT_PIN 26
 #define FLAME_PIN 25
-#define SERVO_PIN 12      // Chân điều khiển servo
+#define SERVO_PIN 2      // Chân điều khiển servo
 #define PIR_PIN 33        // Chân cảm biến chuyển động PIR SR501
 
 // Firebase & WiFi
 #define API_KEY "AIzaSyAxAR_UUEaXdJl7SMo8vhbPcDcLvvGSM0w"
-#define DATABASE_URL "https://doantotnghiep-ae0f8-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define DATABASE_URL "https://doantotnghiep-ae0f8-default-rtdb.asia-southeast1.firebasedatabase.app"
 #define FIREBASE_PROJECT_ID "doantotnghiep-ae0f8"
+#define FIREBASE_AUTH_DOMAIN "doantotnghiep-ae0f8.firebaseapp.com"
+#define FIREBASE_STORAGE_BUCKET "doantotnghiep-ae0f8.firebasestorage.app"
+#define FIREBASE_MESSAGING_SENDER_ID "701901349885"
+#define FIREBASE_APP_ID "1:701901349885:web:ccb77f635d55f6bdb6af94"
+#define USER_EMAIL "phucdoantotnghiep@gmail.com"
+#define USER_PASSWORD "Doantotnghiep123@"
 const char* ssid = "Xuantruong";
 const char* password = "1234567890";
-const char* scriptUrl = "https://script.google.com/macros/s/AKfycbxzjxuyfTwyfeiC58acN-kOGSL5VbzS_I5SfgOAM77Jc8hmagMKqLHdpygwcuxNc_0s/exec";
+
+// Cấu hình NTP
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 25200;      // GMT+7 (7 giờ * 3600 giây)
+const int daylightOffset_sec = 0;      // Không sử dụng giờ mùa hè
 
 // DHT & OLED
 #define DHT_TYPE DHT11
@@ -95,11 +106,15 @@ unsigned long lastDeviceCheck = 0;
 unsigned long lastMotionCheck = 0;
 unsigned long lastMotionDetected = 0;
 unsigned long lastDoorOpened = 0;
+unsigned long lastNtpSync = 0;
+unsigned long lastThresholdCheck = 0;
 const unsigned long SENSOR_UPDATE_INTERVAL = 5000; // 5 giây
 const unsigned long ALERT_CHECK_INTERVAL = 10000; // 10 giây
 const unsigned long DEVICE_CHECK_INTERVAL = 1000; // 1 giây
 const unsigned long MOTION_CHECK_INTERVAL = 500; // 0.5 giây
 const unsigned long AUTO_OFF_DELAY = 10000; // 10 giây
+const unsigned long NTP_SYNC_INTERVAL = 3600000; // 1 giờ
+const unsigned long THRESHOLD_CHECK_INTERVAL = 5000; // 5 giây
 
 void IRAM_ATTR buttonPressed() {
   checkOut = !checkOut;
@@ -125,8 +140,34 @@ void setup() {
   config.database_url = DATABASE_URL;
   config.token_status_callback = tokenStatusCallback;
 
+  // Cấu hình xác thực email/password
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  // In thông tin cấu hình Firebase để kiểm tra
+  Serial.println("\n----- Thông tin cấu hình Firebase -----");
+  Serial.println("API Key: " + String(API_KEY));
+  Serial.println("Database URL: " + String(DATABASE_URL));
+  Serial.println("Project ID: " + String(FIREBASE_PROJECT_ID));
+  Serial.println("Auth Domain: " + String(FIREBASE_AUTH_DOMAIN));
+  Serial.println("Storage Bucket: " + String(FIREBASE_STORAGE_BUCKET));
+  Serial.println("Messaging Sender ID: " + String(FIREBASE_MESSAGING_SENDER_ID));
+  Serial.println("App ID: " + String(FIREBASE_APP_ID));
+  Serial.println("Email: " + String(USER_EMAIL));
+  Serial.println("Password: " + String(USER_PASSWORD));
+  Serial.println("----- Kết thúc thông tin cấu hình -----\n");
+
+  // Bắt đầu kết nối với Firebase
+  Serial.println("Bắt đầu kết nối với Firebase...");
+
+  // Sử dụng xác thực email/password
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
+
+  // Đặt thời gian chờ cho các hoạt động Firebase
+  fbdo.setResponseSize(4096);
+  Firebase.RTDB.setReadTimeout(&fbdo, 1000 * 60);
+  Firebase.RTDB.setwriteSizeLimit(&fbdo, "tiny");
 
   // Khởi tạo các cảm biến và thiết bị
   SPI.begin();
@@ -164,6 +205,40 @@ void setup() {
   initAutoMode();
 
   Serial.println("Hệ thống đã sẵn sàng!");
+
+  // Đồng bộ thời gian NTP
+  Serial.println("Đang đồng bộ thời gian NTP khi khởi động...");
+  syncNtpTime();
+
+  // Kiểm tra lại thời gian sau khi đồng bộ
+  struct tm timeinfo;
+  if(getLocalTime(&timeinfo)) {
+    char timeStr[30];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+
+    Serial.println("Thời gian hiện tại sau khi đồng bộ:");
+    Serial.println(timeStr);
+
+    // Kiểm tra timestamp
+    time_t now;
+    time(&now);
+    Serial.print("Timestamp hiện tại: ");
+    Serial.println((unsigned long)now);
+
+    // Kiểm tra ngày
+    char dateStr[9];
+    strftime(dateStr, sizeof(dateStr), "%Y%m%d", &timeinfo);
+    Serial.print("Ngày hiện tại (YYYYMMDD): ");
+    Serial.println(dateStr);
+  } else {
+    Serial.println("⚠️ Không thể lấy thời gian sau khi đồng bộ!");
+  }
+
+  // Đặt thời gian đồng bộ NTP cuối cùng
+  lastNtpSync = millis();
+
+  // Kiểm tra kết nối Firebase
+  checkFirebaseConnection();
 }
 
 void loop() {
@@ -193,6 +268,18 @@ void loop() {
     lastMotionCheck = currentMillis;
   }
 
+  // Đồng bộ thời gian NTP định kỳ
+  if (currentMillis - lastNtpSync >= NTP_SYNC_INTERVAL) {
+    syncNtpTime();
+    lastNtpSync = currentMillis;
+  }
+
+  // Kiểm tra và cập nhật ngưỡng cảnh báo định kỳ
+  if (currentMillis - lastThresholdCheck >= THRESHOLD_CHECK_INTERVAL) {
+    readThresholds();
+    lastThresholdCheck = currentMillis;
+  }
+
   // Kiểm tra chế độ tự động
   checkAutoMode(currentMillis);
 
@@ -207,15 +294,16 @@ void loop() {
   cardID.toUpperCase();
   Serial.println("\n📌 Mã thẻ: " + cardID);
 
-  bool checkInSuccess = sendToGoogleSheets(cardID, checkOut);
   bool firebaseSuccess = sendToFirebase(cardID, checkOut);
   delay(2000);
 
-  if (checkInSuccess) displayCheckInSuccess();
-  else displayCheckInFailed();
-
-  if (firebaseSuccess) Serial.println("✅ Firebase OK");
-  else Serial.println("❌ Firebase lỗi");
+  if (firebaseSuccess) {
+    displayCheckInSuccess();
+    Serial.println("✅ Firebase OK");
+  } else {
+    displayCheckInFailed();
+    Serial.println("❌ Firebase lỗi");
+  }
 }
 
 // Khởi tạo trạng thái thiết bị trên Firebase
@@ -392,42 +480,114 @@ void controlDoor(bool state) {
 
 void readThresholds() {
   if (Firebase.ready()) {
+    bool hasChanges = false;
+    float oldTempMin = tempMin;
+    float oldTempMax = tempMax;
+    float oldHumidMin = humidMin;
+    float oldHumidMax = humidMax;
+    float oldGasThreshold = gasThreshold;
+    int oldCheckInHour = checkInHour;
+    int oldCheckInMinute = checkInMinute;
+    int oldCheckOutHour = checkOutHour;
+    int oldCheckOutMinute = checkOutMinute;
+
     // Đọc ngưỡng nhiệt độ
     if (Firebase.RTDB.getFloat(&fbdo, "settings/thresholds/temperature/min")) {
-      tempMin = fbdo.floatData();
+      float newValue = fbdo.floatData();
+      if (newValue != tempMin) {
+        Serial.printf("Cập nhật ngưỡng nhiệt độ tối thiểu: %.1f -> %.1f\n", tempMin, newValue);
+        tempMin = newValue;
+        hasChanges = true;
+      }
     }
+
     if (Firebase.RTDB.getFloat(&fbdo, "settings/thresholds/temperature/max")) {
-      tempMax = fbdo.floatData();
+      float newValue = fbdo.floatData();
+      if (newValue != tempMax) {
+        Serial.printf("Cập nhật ngưỡng nhiệt độ tối đa: %.1f -> %.1f\n", tempMax, newValue);
+        tempMax = newValue;
+        hasChanges = true;
+      }
     }
 
     // Đọc ngưỡng độ ẩm
     if (Firebase.RTDB.getFloat(&fbdo, "settings/thresholds/humidity/min")) {
-      humidMin = fbdo.floatData();
+      float newValue = fbdo.floatData();
+      if (newValue != humidMin) {
+        Serial.printf("Cập nhật ngưỡng độ ẩm tối thiểu: %.1f -> %.1f\n", humidMin, newValue);
+        humidMin = newValue;
+        hasChanges = true;
+      }
     }
+
     if (Firebase.RTDB.getFloat(&fbdo, "settings/thresholds/humidity/max")) {
-      humidMax = fbdo.floatData();
+      float newValue = fbdo.floatData();
+      if (newValue != humidMax) {
+        Serial.printf("Cập nhật ngưỡng độ ẩm tối đa: %.1f -> %.1f\n", humidMax, newValue);
+        humidMax = newValue;
+        hasChanges = true;
+      }
     }
 
     // Đọc ngưỡng khí gas
     if (Firebase.RTDB.getFloat(&fbdo, "settings/thresholds/gas")) {
-      gasThreshold = fbdo.floatData();
+      float newValue = fbdo.floatData();
+      if (newValue != gasThreshold) {
+        Serial.printf("Cập nhật ngưỡng khí gas: %.1f -> %.1f\n", gasThreshold, newValue);
+        gasThreshold = newValue;
+        hasChanges = true;
+      }
     }
 
     // Đọc ngưỡng thời gian điểm danh
     if (Firebase.RTDB.getInt(&fbdo, "settings/attendance/checkInHour")) {
-      checkInHour = fbdo.intData();
-    }
-    if (Firebase.RTDB.getInt(&fbdo, "settings/attendance/checkInMinute")) {
-      checkInMinute = fbdo.intData();
-    }
-    if (Firebase.RTDB.getInt(&fbdo, "settings/attendance/checkOutHour")) {
-      checkOutHour = fbdo.intData();
-    }
-    if (Firebase.RTDB.getInt(&fbdo, "settings/attendance/checkOutMinute")) {
-      checkOutMinute = fbdo.intData();
+      int newValue = fbdo.intData();
+      if (newValue != checkInHour) {
+        Serial.printf("Cập nhật giờ điểm danh vào: %d -> %d\n", checkInHour, newValue);
+        checkInHour = newValue;
+        hasChanges = true;
+      }
     }
 
-    Serial.println("Đã đọc ngưỡng cảnh báo và thời gian điểm danh từ Firebase");
+    if (Firebase.RTDB.getInt(&fbdo, "settings/attendance/checkInMinute")) {
+      int newValue = fbdo.intData();
+      if (newValue != checkInMinute) {
+        Serial.printf("Cập nhật phút điểm danh vào: %d -> %d\n", checkInMinute, newValue);
+        checkInMinute = newValue;
+        hasChanges = true;
+      }
+    }
+
+    if (Firebase.RTDB.getInt(&fbdo, "settings/attendance/checkOutHour")) {
+      int newValue = fbdo.intData();
+      if (newValue != checkOutHour) {
+        Serial.printf("Cập nhật giờ điểm danh ra: %d -> %d\n", checkOutHour, newValue);
+        checkOutHour = newValue;
+        hasChanges = true;
+      }
+    }
+
+    if (Firebase.RTDB.getInt(&fbdo, "settings/attendance/checkOutMinute")) {
+      int newValue = fbdo.intData();
+      if (newValue != checkOutMinute) {
+        Serial.printf("Cập nhật phút điểm danh ra: %d -> %d\n", checkOutMinute, newValue);
+        checkOutMinute = newValue;
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges) {
+      Serial.println("✅ Đã cập nhật ngưỡng cảnh báo và thời gian điểm danh từ Firebase");
+
+      // Hiển thị tất cả các ngưỡng hiện tại
+      Serial.println("\n----- Ngưỡng cảnh báo hiện tại -----");
+      Serial.printf("Nhiệt độ: %.1f°C - %.1f°C\n", tempMin, tempMax);
+      Serial.printf("Độ ẩm: %.1f%% - %.1f%%\n", humidMin, humidMax);
+      Serial.printf("Khí gas: %.1f ppm\n", gasThreshold);
+      Serial.printf("Thời gian điểm danh vào: %02d:%02d\n", checkInHour, checkInMinute);
+      Serial.printf("Thời gian điểm danh ra: %02d:%02d\n", checkOutHour, checkOutMinute);
+      Serial.println("----------------------------------\n");
+    }
   }
 }
 
@@ -601,41 +761,67 @@ void createAlert(String type, float value, float threshold, String message) {
 }
 
 unsigned long getCurrentTimestamp() {
-  return millis(); // Trong thực tế, nên sử dụng NTP để lấy thời gian chính xác
-}
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)) {
+    Serial.println("Không thể lấy thời gian từ NTP, đang thử đồng bộ lại...");
 
-bool sendToGoogleSheets(String cardID, bool isCheckOut) {
-  if (WiFi.status() != WL_CONNECTED) return false;
-  HTTPClient http;
-  String action = isCheckOut ? "checkout" : "checkin";
-  String url = String(scriptUrl) + "?action=" + action + "&rfid=" + cardID;
-  http.begin(url);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  int httpResponseCode = http.GET();
-  if (httpResponseCode > 0) {
-    String response = http.getString();
-    DynamicJsonDocument doc(1024);
-    if (deserializeJson(doc, response) == DeserializationError::Ok) {
-      String status = doc["status"].as<String>();
-      String message = doc["message"].as<String>();
-      Serial.println(message);
-      if (status == "success") {
-        digitalWrite(BUZZER_PIN, HIGH);
-        delay(500);
-        digitalWrite(BUZZER_PIN, LOW);
-        if (!isCheckOut) digitalWrite(LED_PIN, HIGH);
-        return true;
-      }
+    // Thử đồng bộ lại thời gian NTP
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    delay(500);
+
+    // Thử lấy thời gian lần nữa
+    if(!getLocalTime(&timeinfo)) {
+      Serial.println("Vẫn không thể lấy thời gian từ NTP, sử dụng thời gian ước tính!");
+
+      // Nếu vẫn không lấy được thời gian, tạo một timestamp ước tính
+      // Giả sử ngày 2024-05-10 và thời gian hiện tại dựa trên millis()
+      time_t estimatedTime = 1715299200; // 2024-05-10 00:00:00 GMT
+
+      // Thêm số giây trong ngày dựa trên millis()
+      unsigned long secondsInDay = (millis() / 1000) % 86400;
+      estimatedTime += secondsInDay;
+
+      return (unsigned long)estimatedTime;
     }
   }
-  http.end();
-  return false;
+
+  time_t now;
+  time(&now);
+
+  // In thông tin timestamp để debug
+  Serial.print("Timestamp hiện tại: ");
+  Serial.println((unsigned long)now);
+
+  return (unsigned long)now;
 }
+
+// Hàm lấy ngày hiện tại theo định dạng YYYYMMDD
+String getCurrentDateString() {
+  // Lấy timestamp hiện tại
+  unsigned long timestamp = getCurrentTimestamp();
+
+  // Chuyển đổi timestamp thành struct tm
+  struct tm timeinfo;
+  time_t now = timestamp;
+  localtime_r(&now, &timeinfo);
+
+  // Định dạng ngày tháng
+  char dateStr[9];
+  strftime(dateStr, sizeof(dateStr), "%Y%m%d", &timeinfo);
+
+  // In thông tin ngày tháng để debug
+  Serial.print("Ngày hiện tại (YYYYMMDD): ");
+  Serial.println(dateStr);
+
+  return String(dateStr);
+}
+
+// Hàm sendToGoogleSheets đã được loại bỏ
 
 bool sendToFirebase(String cardID, bool manualCheckOut) {
   if (Firebase.ready()) {
     // Lấy ngày hiện tại theo định dạng YYYYMMDD
-    String date = "20230501"; // Trong thực tế, nên sử dụng NTP để lấy ngày chính xác
+    String date = getCurrentDateString(); // Sử dụng hàm lấy ngày hiện tại
 
     // Lấy thông tin sinh viên
     String studentName = "Unknown";
@@ -664,18 +850,26 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
       }
     }
 
-    // Xác định thời điểm hiện tại
+    // Xác định thời điểm hiện tại từ NTP
     unsigned long currentTime = getCurrentTimestamp();
 
-    // Giả lập thời gian hiện tại (giờ và phút) từ millis()
-    // Trong thực tế, nên sử dụng NTP để lấy thời gian chính xác
-    unsigned long millisInDay = millis() % 86400000; // Số milli giây trong ngày hiện tại
-    int currentHour = (millisInDay / 3600000) % 24;
-    int currentMinute = (millisInDay / 60000) % 60;
+    // Lấy giờ và phút từ thời gian NTP
+    struct tm timeinfo;
+    time_t now = currentTime;
+    localtime_r(&now, &timeinfo);
+
+    int currentHour = timeinfo.tm_hour;
+    int currentMinute = timeinfo.tm_min;
 
     // Tính toán thời điểm ngưỡng điểm danh ra
     int checkOutTimeInMinutes = checkOutHour * 60 + checkOutMinute;
     int currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+    // In thời gian đầy đủ để debug
+    char timeStr[30];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    Serial.print("Thời gian NTP đầy đủ: ");
+    Serial.println(timeStr);
 
     // Xác định xem đây là điểm danh vào hay ra
     bool isCheckOut = manualCheckOut || (currentTimeInMinutes >= checkOutTimeInMinutes);
@@ -775,4 +969,145 @@ void displayCheckInFailed() {
   display.display();
   delay(2000);
   isDisplayingMessage = false;
+}
+
+// Hàm đồng bộ thời gian NTP
+void syncNtpTime() {
+  Serial.println("Đang đồng bộ thời gian NTP...");
+
+  // Đặt múi giờ và máy chủ NTP
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  // Đợi đến khi đồng bộ được thời gian
+  int retry = 0;
+  const int maxRetries = 5;
+  struct tm timeinfo;
+
+  while (!getLocalTime(&timeinfo) && retry < maxRetries) {
+    Serial.println("Đang chờ đồng bộ thời gian NTP...");
+    delay(1000);
+    retry++;
+  }
+
+  if (getLocalTime(&timeinfo)) {
+    char timeStr[30];
+    strftime(timeStr, sizeof(timeStr), "%A, %B %d %Y %H:%M:%S", &timeinfo);
+
+    Serial.print("Đã đồng bộ thời gian NTP: ");
+    Serial.println(timeStr);
+
+    // Kiểm tra timestamp
+    time_t now;
+    time(&now);
+    Serial.print("Timestamp hiện tại: ");
+    Serial.println((unsigned long)now);
+
+    // Kiểm tra xem timestamp có hợp lệ không (phải lớn hơn 1/1/2020)
+    if (now < 1577836800) { // 1/1/2020 00:00:00 GMT
+      Serial.println("⚠️ Timestamp không hợp lệ! Đang thử đồng bộ lại...");
+
+      // Thử đồng bộ lại với máy chủ NTP khác
+      const char* backupNtpServer = "time.google.com";
+      Serial.print("Đang thử với máy chủ NTP dự phòng: ");
+      Serial.println(backupNtpServer);
+
+      configTime(gmtOffset_sec, daylightOffset_sec, backupNtpServer);
+      delay(2000);
+
+      if (getLocalTime(&timeinfo)) {
+        strftime(timeStr, sizeof(timeStr), "%A, %B %d %Y %H:%M:%S", &timeinfo);
+        Serial.print("Đã đồng bộ thời gian NTP (dự phòng): ");
+        Serial.println(timeStr);
+
+        time(&now);
+        Serial.print("Timestamp mới: ");
+        Serial.println((unsigned long)now);
+      }
+    }
+  } else {
+    Serial.println("❌ Không thể đồng bộ thời gian NTP sau nhiều lần thử!");
+  }
+}
+
+void checkFirebaseConnection() {
+  Serial.println("\n----- Kiểm tra kết nối Firebase -----");
+
+  if (Firebase.ready()) {
+    Serial.println("✅ Firebase đã sẵn sàng!");
+
+    // Kiểm tra kết nối bằng cách đọc một giá trị đơn giản
+    if (Firebase.RTDB.getString(&fbdo, "/test")) {
+      Serial.println("✅ Kết nối Firebase thành công!");
+      Serial.println("Giá trị đọc được: " + fbdo.stringData());
+    } else {
+      Serial.println("❌ Lỗi đọc dữ liệu từ Firebase: " + fbdo.errorReason());
+
+      // Thử ghi một giá trị đơn giản
+      if (Firebase.RTDB.setString(&fbdo, "/test", "ESP32 Connected")) {
+        Serial.println("✅ Ghi dữ liệu thành công!");
+      } else {
+        Serial.println("❌ Lỗi ghi dữ liệu: " + fbdo.errorReason());
+        Serial.println("Mã lỗi: " + String(fbdo.errorCode()) + ", Thông báo: " + fbdo.errorReason());
+
+        // Kiểm tra lỗi cụ thể
+        if (fbdo.errorCode() == -127) {
+          Serial.println("Lỗi -127: Thiếu thông tin xác thực cần thiết");
+          Serial.println("Kiểm tra lại DATABASE_URL và API_KEY");
+
+          // Thử sửa DATABASE_URL (thêm dấu / ở cuối nếu chưa có)
+          if (!String(DATABASE_URL).endsWith("/")) {
+            Serial.println("Thử thêm dấu / vào cuối DATABASE_URL...");
+            String newUrl = String(DATABASE_URL) + "/";
+            Serial.println("URL mới: " + newUrl);
+
+            // Cập nhật URL trong cấu hình
+            config.database_url = newUrl.c_str();
+
+            // Khởi tạo lại kết nối Firebase
+            Serial.println("Thử kết nối lại...");
+            Firebase.begin(&config, &auth);
+          } else {
+            // Thử kết nối lại
+            Serial.println("Thử kết nối lại...");
+            Firebase.begin(&config, &auth);
+          }
+        } else if (fbdo.errorCode() == 400) {
+          Serial.println("Lỗi 400: Thông tin xác thực không hợp lệ");
+          Serial.println("Kiểm tra lại USER_EMAIL và USER_PASSWORD");
+
+          // In thông tin xác thực hiện tại
+          Serial.println("Email: " + String(USER_EMAIL));
+          Serial.println("Password: " + String(USER_PASSWORD));
+
+          // Thử kết nối lại
+          Serial.println("Thử kết nối lại...");
+          Firebase.begin(&config, &auth);
+        }
+      }
+    }
+  } else {
+    Serial.println("❌ Firebase chưa sẵn sàng!");
+
+    // In thông tin cấu hình
+    Serial.println("API Key: " + String(API_KEY));
+    Serial.println("Database URL: " + String(DATABASE_URL));
+    Serial.println("Project ID: " + String(FIREBASE_PROJECT_ID));
+    Serial.println("Email: " + String(USER_EMAIL));
+    Serial.println("Password: " + String(USER_PASSWORD));
+
+    // Thử kết nối lại bằng cách khởi tạo lại Firebase
+    Serial.println("Đang thử khởi tạo lại kết nối Firebase...");
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+
+    // Kiểm tra lại sau khi khởi tạo lại
+    delay(1000);
+    if (Firebase.ready()) {
+      Serial.println("✅ Kết nối lại thành công!");
+    } else {
+      Serial.println("❌ Kết nối lại thất bại!");
+    }
+  }
+
+  Serial.println("----- Kết thúc kiểm tra -----\n");
 }

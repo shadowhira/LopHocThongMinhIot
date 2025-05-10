@@ -48,65 +48,91 @@ const AttendanceScreen = () => {
     setLoading(true);
     const dateString = formatDateToString(selectedDate);
 
-    // Lắng nghe thay đổi dữ liệu điểm danh
-    const attendanceRef = ref(db, `attendance/${dateString}`);
-    const unsubscribe = onValue(attendanceRef, async (snapshot) => {
-      if (snapshot.exists()) {
-        const attendanceData = snapshot.val();
+    // Kiểm tra cả ngày hiện tại và ngày cố định 20230501
+    const checkBothDates = async () => {
+      // Mảng chứa tất cả bản ghi điểm danh
+      let allRecords = [];
 
-        // Chuyển đổi từ object sang array và lấy thông tin sinh viên
-        const records = [];
+      // Lấy dữ liệu từ ngày được chọn
+      const currentDateRef = ref(db, `attendance/${dateString}`);
+      const currentDateSnapshot = await get(currentDateRef);
 
-        // Lấy tất cả thông tin sinh viên một lần
-        const studentsRef = ref(db, 'students');
-        const studentsSnapshot = await get(studentsRef);
-        const studentsData = studentsSnapshot.exists() ? studentsSnapshot.val() : {};
-        const totalStudents = studentsSnapshot.exists() ? Object.keys(studentsData).length : 0;
+      // Lấy dữ liệu từ ngày cố định 20230501
+      const fixedDateRef = ref(db, `attendance/20230501`);
+      const fixedDateSnapshot = await get(fixedDateRef);
 
-        // Tạo danh sách điểm danh với thông tin sinh viên
-        for (const key of Object.keys(attendanceData)) {
+      // Lấy thông tin sinh viên
+      const studentsRef = ref(db, 'students');
+      const studentsSnapshot = await get(studentsRef);
+      const studentsData = studentsSnapshot.exists() ? studentsSnapshot.val() : {};
+      const totalStudents = studentsSnapshot.exists() ? Object.keys(studentsData).length : 0;
+
+      // Xử lý dữ liệu từ ngày được chọn
+      if (currentDateSnapshot.exists()) {
+        const currentDateData = currentDateSnapshot.val();
+        for (const key of Object.keys(currentDateData)) {
           const studentName = studentsData[key]?.name || 'Không xác định';
-
-          records.push({
-            id: key,
+          allRecords.push({
+            id: key + '_current',
             rfidId: key,
             studentName: studentName,
-            timeIn: attendanceData[key].in || null,
-            timeOut: attendanceData[key].out || null,
-            status: attendanceData[key].status || 'absent'
+            timeIn: currentDateData[key].in || null,
+            timeOut: currentDateData[key].out || null,
+            status: currentDateData[key].status || 'absent',
+            source: 'current'
           });
         }
-
-        setAttendanceRecords(records);
-
-        // Tính toán thống kê
-        const presentCount = records.filter(record => record.status === 'present').length;
-        const lateCount = records.filter(record => record.status === 'late').length;
-
-        // Cập nhật thống kê
-        setStats({
-          totalStudents,
-          presentToday: presentCount,
-          lateToday: lateCount,
-          absentToday: totalStudents - presentCount - lateCount
-        });
-      } else {
-        setAttendanceRecords([]);
-
-        // Lấy tổng số sinh viên
-        const studentsRef = ref(db, 'students');
-        const studentsSnapshot = await get(studentsRef);
-        const totalStudents = studentsSnapshot.exists() ? Object.keys(studentsSnapshot.val()).length : 0;
-
-        setStats({
-          totalStudents,
-          presentToday: 0,
-          lateToday: 0,
-          absentToday: totalStudents
-        });
       }
 
+      // Xử lý dữ liệu từ ngày cố định 20230501
+      if (fixedDateSnapshot.exists()) {
+        const fixedDateData = fixedDateSnapshot.val();
+        for (const key of Object.keys(fixedDateData)) {
+          // Kiểm tra xem sinh viên này đã có trong danh sách chưa
+          const existingRecord = allRecords.find(record => record.rfidId === key);
+          if (!existingRecord) {
+            const studentName = studentsData[key]?.name || 'Không xác định';
+            allRecords.push({
+              id: key + '_fixed',
+              rfidId: key,
+              studentName: studentName,
+              timeIn: fixedDateData[key].in || null,
+              timeOut: fixedDateData[key].out || null,
+              status: fixedDateData[key].status || 'absent',
+              source: 'fixed'
+            });
+          }
+        }
+      }
+
+      // Cập nhật state với tất cả bản ghi
+      setAttendanceRecords(allRecords);
+
+      // Tính toán thống kê
+      const presentCount = allRecords.filter(record => record.status === 'present').length;
+      const lateCount = allRecords.filter(record => record.status === 'late').length;
+
+      // Cập nhật thống kê
+      setStats({
+        totalStudents,
+        presentToday: presentCount,
+        lateToday: lateCount,
+        absentToday: totalStudents - presentCount - lateCount
+      });
+
       setLoading(false);
+    };
+
+    // Gọi hàm kiểm tra cả hai ngày
+    checkBothDates();
+
+    // Lắng nghe thay đổi dữ liệu điểm danh cho ngày hiện tại
+    const attendanceRef = ref(db, `attendance/${dateString}`);
+
+    // Lắng nghe thay đổi ở ngày hiện tại
+    const unsubscribe = onValue(attendanceRef, async () => {
+      // Khi có thay đổi, gọi lại hàm kiểm tra cả hai ngày
+      checkBothDates();
     }, (error) => {
       console.error('Error reading attendance data:', error);
       setLoading(false);
@@ -139,7 +165,17 @@ const AttendanceScreen = () => {
 
   const formatTime = (timestamp) => {
     if (!timestamp) return 'N/A';
-    const date = new Date(timestamp);
+
+    // Check if timestamp is Unix timestamp (seconds)
+    // If timestamp is too small (before 2020), multiply by 1000 to convert from seconds to milliseconds
+    // Timestamp 1577836800 corresponds to 1/1/2020 00:00:00 GMT
+    const milliseconds = timestamp < 1577836800000 ? timestamp * 1000 : timestamp;
+
+    const date = new Date(milliseconds);
+
+    // Debug: Log to console for verification
+    console.log(`Original timestamp: ${timestamp}, Converted: ${milliseconds}, Date: ${date.toLocaleString()}`);
+
     return date.toLocaleTimeString();
   };
 

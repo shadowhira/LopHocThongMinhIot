@@ -27,7 +27,17 @@ const AlertsScreen = () => {
 
   const formatTime = (timestamp) => {
     if (!timestamp) return 'N/A';
-    const date = new Date(timestamp);
+
+    // Check if timestamp is Unix timestamp (seconds)
+    // If timestamp is too small (before 2020), multiply by 1000 to convert from seconds to milliseconds
+    // Timestamp 1577836800 corresponds to 1/1/2020 00:00:00 GMT
+    const milliseconds = timestamp < 1577836800000 ? timestamp * 1000 : timestamp;
+
+    const date = new Date(milliseconds);
+
+    // Debug: Log to console for verification
+    console.log(`Alert - Original timestamp: ${timestamp}, Converted: ${milliseconds}, Date: ${date.toLocaleString()}`);
+
     return date.toLocaleTimeString() + ' ' + date.toLocaleDateString();
   };
 
