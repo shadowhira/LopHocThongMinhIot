@@ -258,3 +258,35 @@ Ví dụ:
 ```
 node create-alert.js temperature "Nhiệt độ quá cao: 35°C"
 ```
+
+### 6.5. Quản lý danh sách học sinh
+
+Script `create-students.js` cho phép quản lý danh sách học sinh trên Firebase:
+
+1. Tạo danh sách học sinh mẫu:
+```
+node create-students.js create
+```
+
+2. Import học sinh từ file CSV:
+```
+node create-students.js import students.csv
+```
+
+3. Kiểm tra danh sách học sinh hiện có:
+```
+node create-students.js check
+```
+
+4. Xóa tất cả học sinh:
+```
+node create-students.js delete
+```
+
+File CSV phải có định dạng như sau:
+```
+rfidId,name,studentId,class,major
+A1B2C3D4,Nguyễn Văn A,2021607001,2021DHKTMT01,KTMT
+```
+
+Một file mẫu `students_template.csv` được cung cấp trong thư mục `hardware-simulator`.
