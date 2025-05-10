@@ -134,6 +134,24 @@ Quản lý cài đặt ứng dụng:
 - Chế độ giao diện: Sáng/Tối
 - Cài đặt thông báo
 - Cài đặt ngưỡng cảnh báo cho các cảm biến
+- Cài đặt thời gian điểm danh
+- Quản lý danh sách sinh viên
+
+#### 3.6.1. Quản lý danh sách sinh viên
+
+Màn hình quản lý danh sách sinh viên cho phép:
+- Xem danh sách sinh viên đã đăng ký
+- Tìm kiếm sinh viên theo tên, mã sinh viên, lớp, ngành hoặc mã RFID
+- Thêm sinh viên mới
+- Sửa thông tin sinh viên
+- Xóa sinh viên
+
+Cách sử dụng:
+1. Mở màn hình Cài đặt
+2. Nhấn vào "Quản lý danh sách sinh viên"
+3. Sử dụng nút "+" để thêm sinh viên mới
+4. Nhấn vào biểu tượng bút chì để sửa thông tin sinh viên
+5. Nhấn vào biểu tượng thùng rác để xóa sinh viên
 
 ## 4. Các tính năng chính
 

@@ -190,10 +190,18 @@ void setup() {
   display.clearDisplay();
 
   // Khởi tạo servo
+  Serial.println("Khởi tạo servo...");
   ESP32PWM::allocateTimer(0);
   doorServo.setPeriodHertz(50);    // Tần số PWM cho servo (50Hz)
   doorServo.attach(SERVO_PIN, 500, 2400); // Chân, min pulse width, max pulse width
-  doorServo.write(servoClosedPosition); // Mặc định đóng cửa
+
+  // Kiểm tra servo bằng cách di chuyển qua lại
+  Serial.println("Kiểm tra servo...");
+  doorServo.write(servoOpenPosition);
+  delay(1000);
+  doorServo.write(servoClosedPosition);
+  delay(1000);
+  Serial.println("Kiểm tra servo hoàn tất");
 
   // Đọc ngưỡng cảnh báo từ Firebase
   readThresholds();
@@ -446,7 +454,23 @@ void checkAutoMode(unsigned long currentMillis) {
     // Nếu cửa đang mở và đã qua thời gian delay
     if (currentMillis - lastDoorOpened >= AUTO_OFF_DELAY) {
       // Tự động đóng cửa
+      Serial.println("Tự động đóng cửa sau thời gian chờ");
       controlDoor(false);
+    }
+  }
+
+  // Kiểm tra trạng thái chế độ tự động từ Firebase
+  if (currentMillis - lastDeviceCheck >= DEVICE_CHECK_INTERVAL * 10) {
+    if (Firebase.ready()) {
+      // Kiểm tra chế độ tự động cho cửa
+      if (Firebase.RTDB.getBool(&fbdo, "devices/auto/door")) {
+        bool newDoorAutoMode = fbdo.boolData();
+        if (newDoorAutoMode != doorAutoMode) {
+          doorAutoMode = newDoorAutoMode;
+          Serial.print("Cập nhật chế độ tự động cửa: ");
+          Serial.println(doorAutoMode ? "BẬT" : "TẮT");
+        }
+      }
     }
   }
 }
@@ -467,14 +491,35 @@ void controlLight(bool state) {
 // Điều khiển cửa (servo)
 void controlDoor(bool state) {
   int position = state ? servoOpenPosition : servoClosedPosition;
+
+  // Thêm debug để kiểm tra servo
+  Serial.print("Điều khiển servo đến vị trí: ");
+  Serial.println(position);
+
+  // Đảm bảo servo đã được khởi tạo đúng
+  if (!doorServo.attached()) {
+    Serial.println("⚠️ Servo chưa được khởi tạo, đang khởi tạo lại...");
+    doorServo.attach(SERVO_PIN, 500, 2400);
+  }
+
+  // Di chuyển servo
   doorServo.write(position);
+  doorState = state;
   Serial.println(state ? "Cửa: MỞ" : "Cửa: ĐÓNG");
+
+  // Thêm delay nhỏ để đảm bảo servo có thời gian di chuyển
+  delay(100);
 
   // Cập nhật trạng thái thực tế lên Firebase
   if (Firebase.RTDB.setBool(&fbdo, "devices/status/door1", state)) {
     Serial.println("✅ Cập nhật trạng thái cửa thành công");
   } else {
     Serial.println("❌ Lỗi cập nhật trạng thái cửa: " + fbdo.errorReason());
+  }
+
+  // Cập nhật trạng thái cửa trên Firebase
+  if (Firebase.RTDB.setBool(&fbdo, "devices/doors/door1", state)) {
+    Serial.println("✅ Cập nhật lệnh điều khiển cửa thành công");
   }
 }
 
@@ -883,6 +928,20 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
     Serial.print(":");
     Serial.println(checkOutMinute);
 
+    // Kiểm tra trạng thái chế độ tự động cửa
+    if (Firebase.RTDB.getBool(&fbdo, "devices/auto/door")) {
+      doorAutoMode = fbdo.boolData();
+      Serial.print("Chế độ tự động cửa: ");
+      Serial.println(doorAutoMode ? "BẬT" : "TẮT");
+    }
+
+    // Mở cửa khi quẹt thẻ, bất kể là điểm danh vào hay ra
+    if (doorAutoMode) {
+      Serial.println("🚪 Mở cửa tự động khi quẹt thẻ");
+      controlDoor(true);
+      lastDoorOpened = millis();
+    }
+
     if (isCheckOut) {
       // Nếu là điểm danh ra
       if (hasCheckedIn) {
@@ -909,21 +968,8 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
         json.set("in", currentTime);
         json.set("status", "present");
         Serial.println("📝 Điểm danh vào");
-
-        // Nếu đang ở chế độ tự động, mở cửa
-        if (doorAutoMode) {
-          controlDoor(true);
-          lastDoorOpened = millis();
-        }
       } else {
         Serial.println("⚠️ Sinh viên đã điểm danh vào rồi");
-
-        // Vẫn mở cửa nếu đang ở chế độ tự động
-        if (doorAutoMode) {
-          controlDoor(true);
-          lastDoorOpened = millis();
-        }
-
         return true; // Vẫn trả về true vì không phải lỗi
       }
     }

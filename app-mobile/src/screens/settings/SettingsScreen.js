@@ -8,7 +8,7 @@ import * as Notifications from 'expo-notifications';
 import { registerForPushNotificationsAsync } from '../../utils/notificationUtils';
 import { Ionicons } from '@expo/vector-icons';
 
-const SettingsScreen = () => {
+const SettingsScreen = ({ navigation }) => {
   // Sử dụng giá trị mặc định cho theme để tránh lỗi
   const themeContext = useTheme();
   const theme = themeContext?.theme || {
@@ -477,6 +477,21 @@ const SettingsScreen = () => {
             <Text style={[styles.infoText, { color: theme.colors.text, fontStyle: 'italic' }]}>
               * Thời gian sau giờ ra sẽ được tính là điểm danh ra
             </Text>
+          </View>
+
+          <View style={[styles.section, { backgroundColor: theme.colors.card }]}>
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+              Quản lý dữ liệu
+            </Text>
+            <TouchableOpacity
+              style={styles.settingRow}
+              onPress={() => navigation.navigate('StudentsManagement')}
+            >
+              <Text style={[styles.settingText, { color: theme.colors.text }]}>
+                Quản lý danh sách sinh viên
+              </Text>
+              <Ionicons name="chevron-forward" size={24} color={theme.colors.primary} />
+            </TouchableOpacity>
           </View>
 
           <View style={[styles.section, { backgroundColor: theme.colors.card }]}>

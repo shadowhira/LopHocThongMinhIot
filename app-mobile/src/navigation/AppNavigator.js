@@ -6,6 +6,9 @@ import { useTheme } from '../hooks/useTheme';
 // Import navigators
 import TabNavigator from './TabNavigator';
 
+// Import screens
+import StudentsManagementScreen from '../screens/settings/StudentsManagementScreen';
+
 const Stack = createStackNavigator();
 
 const AppNavigator = () => {
@@ -31,6 +34,7 @@ const AppNavigator = () => {
         }}
       >
         <Stack.Screen name="Main" component={TabNavigator} />
+        <Stack.Screen name="StudentsManagement" component={StudentsManagementScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
