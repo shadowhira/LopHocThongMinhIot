@@ -93,6 +93,12 @@ Xem thêm các tài liệu chi tiết trong thư mục `docs/`:
 - [Hướng dẫn sử dụng hệ thống](docs/huong-dan-su-dung.md)
 - [Hướng dẫn luồng chạy ứng dụng](docs/huong-dan-luong-chay-app.md)
 - [Thiết kế cấu trúc dữ liệu Firebase](docs/thiet-ke-cau-truc-du-lieu-firebase.md)
+- [Hướng dẫn đọc code Arduino](docs/huong-dan-doc-code-arduino.md)
+- [Cấu trúc dự án](docs/cau-truc-du-an.md)
+- [Hướng dẫn đọc source code ứng dụng di động](docs/huong-dan-doc-source-app-mobile.md)
+  - [Phần 1: Cấu trúc thư mục và các file chính](docs/huong-dan-doc-source-app-mobile.md)
+  - [Phần 2: Các màn hình chính và hooks](docs/huong-dan-doc-source-app-mobile-phan2.md)
+  - [Phần 3: Phân tích chi tiết luồng hoạt động](docs/huong-dan-doc-source-app-mobile-phan3.md)
 
 ## Đóng gói ứng dụng
 
