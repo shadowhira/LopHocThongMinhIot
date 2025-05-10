@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Platform, Modal } from 'react-native';
 import { useTheme } from '../../hooks/useTheme';
-import { ref, onValue } from 'firebase/database';
+import { ref, onValue, get } from 'firebase/database';
 import { db } from '../../config/firebase';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { Ionicons } from '@expo/vector-icons';
 
 const AttendanceScreen = () => {
   // Sử dụng giá trị mặc định cho theme để tránh lỗi
@@ -20,6 +22,8 @@ const AttendanceScreen = () => {
   };
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [stats, setStats] = useState({
     totalStudents: 0,
     presentToday: 0,
@@ -27,12 +31,22 @@ const AttendanceScreen = () => {
     lateToday: 0
   });
 
+  // Hàm chuyển đổi Date thành chuỗi định dạng YYYYMMDD
+  const formatDateToString = (date) => {
+    return date.getFullYear() +
+      String(date.getMonth() + 1).padStart(2, '0') +
+      String(date.getDate()).padStart(2, '0');
+  };
+
+  // Hàm định dạng ngày hiển thị
+  const formatDateDisplay = (date) => {
+    return date.getDate() + '/' + (date.getMonth() + 1) + '/' + date.getFullYear();
+  };
+
   useEffect(() => {
-    // Lấy ngày hiện tại theo định dạng YYYYMMDD
-    const today = new Date();
-    const dateString = today.getFullYear() +
-      String(today.getMonth() + 1).padStart(2, '0') +
-      String(today.getDate()).padStart(2, '0');
+    // Sử dụng ngày được chọn
+    setLoading(true);
+    const dateString = formatDateToString(selectedDate);
 
     // Lắng nghe thay đổi dữ liệu điểm danh
     const attendanceRef = ref(db, `attendance/${dateString}`);
@@ -40,32 +54,28 @@ const AttendanceScreen = () => {
       if (snapshot.exists()) {
         const attendanceData = snapshot.val();
 
-        // Chuyển đổi từ object sang array
-        const records = await Promise.all(Object.keys(attendanceData).map(async (key) => {
-          // Lấy thông tin sinh viên
-          const studentRef = ref(db, `students/${key}`);
-          const studentSnapshot = await onValue(studentRef, (studentData) => {
-            const studentName = studentData.exists() ? studentData.val().name : 'Không xác định';
+        // Chuyển đổi từ object sang array và lấy thông tin sinh viên
+        const records = [];
 
-            return {
-              id: key,
-              rfidId: key,
-              studentName: studentName,
-              timeIn: attendanceData[key].in || null,
-              timeOut: attendanceData[key].out || null,
-              status: attendanceData[key].status || 'absent'
-            };
-          });
+        // Lấy tất cả thông tin sinh viên một lần
+        const studentsRef = ref(db, 'students');
+        const studentsSnapshot = await get(studentsRef);
+        const studentsData = studentsSnapshot.exists() ? studentsSnapshot.val() : {};
+        const totalStudents = studentsSnapshot.exists() ? Object.keys(studentsData).length : 0;
 
-          return {
+        // Tạo danh sách điểm danh với thông tin sinh viên
+        for (const key of Object.keys(attendanceData)) {
+          const studentName = studentsData[key]?.name || 'Không xác định';
+
+          records.push({
             id: key,
             rfidId: key,
-            studentName: 'Đang tải...',
+            studentName: studentName,
             timeIn: attendanceData[key].in || null,
             timeOut: attendanceData[key].out || null,
             status: attendanceData[key].status || 'absent'
-          };
-        }));
+          });
+        }
 
         setAttendanceRecords(records);
 
@@ -73,32 +83,26 @@ const AttendanceScreen = () => {
         const presentCount = records.filter(record => record.status === 'present').length;
         const lateCount = records.filter(record => record.status === 'late').length;
 
-        // Lấy tổng số sinh viên
-        const studentsRef = ref(db, 'students');
-        onValue(studentsRef, (studentsSnapshot) => {
-          const totalStudents = studentsSnapshot.exists() ? Object.keys(studentsSnapshot.val()).length : 0;
-
-          setStats({
-            totalStudents,
-            presentToday: presentCount,
-            lateToday: lateCount,
-            absentToday: totalStudents - presentCount - lateCount
-          });
+        // Cập nhật thống kê
+        setStats({
+          totalStudents,
+          presentToday: presentCount,
+          lateToday: lateCount,
+          absentToday: totalStudents - presentCount - lateCount
         });
       } else {
         setAttendanceRecords([]);
 
         // Lấy tổng số sinh viên
         const studentsRef = ref(db, 'students');
-        onValue(studentsRef, (studentsSnapshot) => {
-          const totalStudents = studentsSnapshot.exists() ? Object.keys(studentsSnapshot.val()).length : 0;
+        const studentsSnapshot = await get(studentsRef);
+        const totalStudents = studentsSnapshot.exists() ? Object.keys(studentsSnapshot.val()).length : 0;
 
-          setStats({
-            totalStudents,
-            presentToday: 0,
-            lateToday: 0,
-            absentToday: totalStudents
-          });
+        setStats({
+          totalStudents,
+          presentToday: 0,
+          lateToday: 0,
+          absentToday: totalStudents
         });
       }
 
@@ -109,7 +113,29 @@ const AttendanceScreen = () => {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [selectedDate]); // Thêm selectedDate vào dependency để cập nhật khi ngày thay đổi
+
+  // Xử lý khi thay đổi ngày
+  const onDateChange = (event, selectedDate) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setSelectedDate(selectedDate);
+    }
+  };
+
+  // Chuyển đến ngày hôm trước
+  const goToPreviousDay = () => {
+    const prevDate = new Date(selectedDate);
+    prevDate.setDate(prevDate.getDate() - 1);
+    setSelectedDate(prevDate);
+  };
+
+  // Chuyển đến ngày hôm sau
+  const goToNextDay = () => {
+    const nextDate = new Date(selectedDate);
+    nextDate.setDate(nextDate.getDate() + 1);
+    setSelectedDate(nextDate);
+  };
 
   const formatTime = (timestamp) => {
     if (!timestamp) return 'N/A';
@@ -174,6 +200,37 @@ const AttendanceScreen = () => {
         </Text>
       </View>
 
+      {/* Phần chọn ngày */}
+      <View style={[styles.datePickerContainer, { backgroundColor: theme.colors.card }]}>
+        <TouchableOpacity onPress={goToPreviousDay} style={styles.dateNavButton}>
+          <Ionicons name="chevron-back" size={24} color={theme.colors.primary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.dateSelector}
+          onPress={() => setShowDatePicker(true)}
+        >
+          <Text style={[styles.dateText, { color: theme.colors.primary }]}>
+            {formatDateDisplay(selectedDate)}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={goToNextDay} style={styles.dateNavButton}>
+          <Ionicons name="chevron-forward" size={24} color={theme.colors.primary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* DatePicker */}
+      {showDatePicker && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onDateChange}
+          style={styles.datePicker}
+        />
+      )}
+
       <View style={[styles.statsContainer, { backgroundColor: theme.colors.card }]}>
         <View style={styles.statItem}>
           <Text style={[styles.statValue, { color: theme.colors.text }]}>{stats.totalStudents}</Text>
@@ -207,7 +264,7 @@ const AttendanceScreen = () => {
       ) : (
         <View style={styles.emptyContainer}>
           <Text style={[styles.emptyText, { color: theme.colors.text }]}>
-            Chưa có dữ liệu điểm danh hôm nay
+            Chưa có dữ liệu điểm danh ngày {formatDateDisplay(selectedDate)}
           </Text>
         </View>
       )}
@@ -227,6 +284,35 @@ const styles = StyleSheet.create({
   headerText: {
     fontSize: 24,
     fontWeight: 'bold',
+  },
+  datePickerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    margin: 8,
+    padding: 12,
+    borderRadius: 8,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  dateSelector: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  dateText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  dateNavButton: {
+    padding: 8,
+  },
+  datePicker: {
+    width: '100%',
+    backgroundColor: 'white',
   },
   statsContainer: {
     flexDirection: 'row',

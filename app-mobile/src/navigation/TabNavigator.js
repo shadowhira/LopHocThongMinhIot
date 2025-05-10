@@ -8,6 +8,7 @@ import HomeScreen from '../screens/home/HomeScreen';
 import AttendanceScreen from '../screens/attendance/AttendanceScreen';
 import SensorsScreen from '../screens/sensors/SensorsScreen';
 import AlertsScreen from '../screens/alerts/AlertsScreen';
+import DevicesScreen from '../screens/devices/DevicesScreen';
 import SettingsScreen from '../screens/settings/SettingsScreen';
 
 const Tab = createBottomTabNavigator();
@@ -37,6 +38,8 @@ const TabNavigator = () => {
             iconName = focused ? 'thermometer' : 'thermometer-outline';
           } else if (route.name === 'Alerts') {
             iconName = focused ? 'warning' : 'warning-outline';
+          } else if (route.name === 'Devices') {
+            iconName = focused ? 'hardware' : 'hardware-outline';
           } else if (route.name === 'Settings') {
             iconName = focused ? 'settings' : 'settings-outline';
           }
@@ -59,6 +62,7 @@ const TabNavigator = () => {
       <Tab.Screen name="Attendance" component={AttendanceScreen} options={{ title: 'Điểm danh' }} />
       <Tab.Screen name="Sensors" component={SensorsScreen} options={{ title: 'Cảm biến' }} />
       <Tab.Screen name="Alerts" component={AlertsScreen} options={{ title: 'Cảnh báo' }} />
+      <Tab.Screen name="Devices" component={DevicesScreen} options={{ title: 'Thiết bị' }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{ title: 'Cài đặt' }} />
     </Tab.Navigator>
   );

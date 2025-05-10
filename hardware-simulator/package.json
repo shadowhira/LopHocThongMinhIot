@@ -8,6 +8,7 @@
     "alert": "node create-alert.js",
     "sensor": "node update-sensor.js",
     "attendance": "node simulate-attendance.js",
+    "device": "node simulate-device-control.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",

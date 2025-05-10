@@ -7,7 +7,8 @@ Script này giúp tạo dữ liệu mẫu và đẩy lên Firebase Realtime Data
 - Tạo dữ liệu cảm biến (nhiệt độ, độ ẩm, khí gas, phát hiện lửa) và cập nhật theo thời gian thực
 - Tạo cảnh báo khi các giá trị vượt ngưỡng
 - Tạo dữ liệu sinh viên mẫu
-- Mô phỏng điểm danh sinh viên
+- Mô phỏng điểm danh sinh viên dựa trên ngưỡng thời gian
+- Mô phỏng điều khiển thiết bị (đèn, cửa) và chế độ tự động
 
 ## Cài đặt
 
@@ -118,6 +119,49 @@ Hoặc:
 node simulate-attendance.js checkin A1B2C3D4
 ```
 
+### Mô phỏng điều khiển thiết bị
+
+Để bật/tắt đèn:
+
+```bash
+npm run device -- light on
+npm run device -- light off
+```
+
+Để mở/đóng cửa:
+
+```bash
+npm run device -- door on
+npm run device -- door off
+```
+
+Để bật/tắt chế độ tự động cho đèn:
+
+```bash
+npm run device -- auto-light on
+npm run device -- auto-light off
+```
+
+Để bật/tắt chế độ tự động cho cửa:
+
+```bash
+npm run device -- auto-door on
+npm run device -- auto-door off
+```
+
+Để mô phỏng phát hiện/hủy phát hiện chuyển động:
+
+```bash
+npm run device -- motion on
+npm run device -- motion off
+```
+
+Hoặc:
+
+```bash
+node simulate-device-control.js light on
+```
+
 ## Tùy chỉnh
 
 Bạn có thể tùy chỉnh các thông số trong file `firebase-data-generator.js`:
@@ -128,10 +172,23 @@ const config = {
   sensorVariation: true, // Tạo biến động dữ liệu cảm biến
   createAlerts: true, // Tạo cảnh báo khi vượt ngưỡng
   simulateAttendance: true, // Mô phỏng điểm danh
+  simulateDeviceControl: true, // Mô phỏng điều khiển thiết bị
   thresholds: {
     temperature: { min: 18, max: 30 },
     humidity: { min: 40, max: 80 },
     gas: 1000
+  },
+  attendance: {
+    checkInHour: 7, // Giờ bắt đầu điểm danh vào
+    checkInMinute: 0,
+    checkOutHour: 11, // Giờ bắt đầu điểm danh ra
+    checkOutMinute: 0
+  },
+  devices: {
+    auto: {
+      light: false, // Chế độ tự động đèn
+      door: false // Chế độ tự động cửa
+    }
   }
 };
 ```
