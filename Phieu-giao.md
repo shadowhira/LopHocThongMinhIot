@@ -26,7 +26,7 @@
   Nhận diện sinh viên bằng thẻ **RFID**, lưu dữ liệu lên **Google Sheets** theo thời gian thực.
 
 - **Cửa tự động:**  
-  Cảm biến **HC-SR04** phát hiện người đến gần (<30cm), điều khiển **Servo SG90** mở cửa. Sau 10s không có người sẽ tự động đóng.
+  Quét thẻ RFID điểm danh thì cửa sẽ tự độngmowr, điều khiển **Servo SG90** mở cửa. Sau 10s không có người sẽ tự động đóng.
 
 - **Hệ thống đèn tự động:**  
   Sử dụng cảm biến chuyển động **PIR SR501** để bật đèn **LED 2V**, tự động tắt sau 10s nếu không có người.

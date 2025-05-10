@@ -1,249 +1,15 @@
-// Hàm tạo trigger để tự động đồng bộ dữ liệu từ Google Sheet sang Firebase
-function createSyncTrigger() {
-  // Xóa tất cả các trigger hiện có để tránh trùng lặp
-  var triggers = ScriptApp.getProjectTriggers();
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === "syncToFirebase") {
-      ScriptApp.deleteTrigger(triggers[i]);
-    }
-  }
-
-  // Tạo trigger mới để chạy hàm syncToFirebase mỗi giờ
-  ScriptApp.newTrigger("syncToFirebase")
-    .timeBased()
-    .everyHours(1)
-    .create();
-
-  return "Đã tạo trigger tự động đồng bộ dữ liệu mỗi giờ";
-}
-
-// Hàm đồng bộ dữ liệu từ Google Sheet sang Firebase
-function syncToFirebase() {
-  var sheet = SpreadsheetApp.openById("1TKl9Zv5HLesK8vLozcb0613mZ2EA093zkz5JnM7UmXY");
-  var sheet2 = sheet.getSheetByName("DIEMDANH");
-
-  // Cấu hình Firebase
-  var firebaseConfig = {
-    apiKey: "AIzaSyAxAR_UUEaXdJl7SMo8vhbPcDcLvvGSM0w",
-    authDomain: "doantotnghiep-ae0f8.firebaseapp.com",
-    databaseURL: "https://doantotnghiep-ae0f8-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "doantotnghiep-ae0f8",
-    storageBucket: "doantotnghiep-ae0f8.firebasestorage.app",
-    messagingSenderId: "701901349885",
-    appId: "1:701901349885:web:ccb77f635d55f6bdb6af94"
-  };
-
-  // Trước khi đồng bộ, lấy dữ liệu hiện tại từ Firebase để giữ lại thông tin về số lần chuyển đổi trạng thái
-  var usersUrl = firebaseConfig.databaseURL + "/users.json";
-  var checkOptions = {
-    method: "get",
-    muteHttpExceptions: true
-  };
-
-  var existingUsers = {};
-  try {
-    var checkResponse = UrlFetchApp.fetch(usersUrl, checkOptions);
-    if (checkResponse.getResponseCode() == 200) {
-      var responseText = checkResponse.getContentText();
-      if (responseText && responseText != "null") {
-        existingUsers = JSON.parse(responseText);
-      }
-    }
-  } catch (error) {
-    Logger.log("Lỗi khi lấy dữ liệu người dùng hiện tại: " + error.toString());
-  }
-
-  var data = sheet2.getDataRange().getValues();
-  var headers = data[0]; // Lấy tiêu đề
-  var result = {
-    success: 0,
-    failed: 0,
-    total: data.length - 1 // Trừ đi dòng tiêu đề
-  };
-
-  // Duyệt qua từng dòng dữ liệu (bỏ qua dòng tiêu đề)
-  for (var i = 1; i < data.length; i++) {
-    try {
-      var row = data[i];
-      var date = row[0]; // Ngày
-      var time = row[1]; // Giờ
-      var uid = row[2];  // UID
-      var name = row[3]; // Tên
-      var inout = row[4]; // Trạng thái vào/ra
-
-      // Tạo timestamp từ date và time
-      var dateTimeStr = date + " " + time;
-      var timestamp = new Date(dateTimeStr).getTime();
-      if (isNaN(timestamp)) {
-        timestamp = i; // Nếu không chuyển đổi được, dùng số thứ tự làm timestamp
-      }
-
-      // Tạo dữ liệu để gửi lên Firebase
-      var logData = {
-        date: date,
-        time: time,
-        uid: uid,
-        name: name,
-        inout: inout,
-        timestamp: timestamp
-      };
-
-      // Tạo key duy nhất
-      var logKey = timestamp + "_" + uid;
-
-      // URL để ghi dữ liệu vào Firebase
-      var firebaseUrl = firebaseConfig.databaseURL + "/attendance/" + logKey + ".json";
-
-      // Gửi dữ liệu đến Firebase
-      var options = {
-        method: "put",
-        contentType: "application/json",
-        payload: JSON.stringify(logData)
-      };
-
-      var firebaseResponse = UrlFetchApp.fetch(firebaseUrl, options);
-      result.success++;
-    } catch (error) {
-      result.failed++;
-      Logger.log("Lỗi khi đồng bộ dòng " + i + ": " + error.toString());
-    }
-
-    // Tạm dừng để tránh vượt quá giới hạn API
-    if (i % 10 === 0) {
-      Utilities.sleep(1000);
-    }
-  }
-
-  return result;
-}
-
-// Hàm kiểm tra kết nối Firebase
-function testFirebaseConnection() {
-  try {
-    // Cấu hình Firebase
-    var firebaseConfig = {
-      apiKey: "AIzaSyAxAR_UUEaXdJl7SMo8vhbPcDcLvvGSM0w",
-      authDomain: "doantotnghiep-ae0f8.firebaseapp.com",
-      databaseURL: "https://doantotnghiep-ae0f8-default-rtdb.asia-southeast1.firebasedatabase.app",
-      projectId: "doantotnghiep-ae0f8",
-      storageBucket: "doantotnghiep-ae0f8.firebasestorage.app",
-      messagingSenderId: "701901349885",
-      appId: "1:701901349885:web:ccb77f635d55f6bdb6af94"
-    };
-
-    // Thử kết nối đến Firebase
-    var testUrl = firebaseConfig.databaseURL + "/test.json";
-    var testData = {
-      timestamp: new Date().getTime(),
-      message: "Test connection"
-    };
-
-    var options = {
-      method: "put",
-      contentType: "application/json",
-      payload: JSON.stringify(testData)
-    };
-
-    var response = UrlFetchApp.fetch(testUrl, options);
-
-    // Xóa dữ liệu test
-    var deleteOptions = {
-      method: "delete"
-    };
-    UrlFetchApp.fetch(testUrl, deleteOptions);
-
-    return {
-      status: "success",
-      message: "Kết nối Firebase thành công",
-      response: JSON.parse(response.getContentText())
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      message: "Lỗi kết nối Firebase: " + error.toString()
-    };
-  }
-}
-
-// Hàm xóa dữ liệu trên Firebase
-function clearFirebaseData() {
-  try {
-    // Cấu hình Firebase
-    var firebaseConfig = {
-      apiKey: "AIzaSyAxAR_UUEaXdJl7SMo8vhbPcDcLvvGSM0w",
-      authDomain: "doantotnghiep-ae0f8.firebaseapp.com",
-      databaseURL: "https://doantotnghiep-ae0f8-default-rtdb.asia-southeast1.firebasedatabase.app",
-      projectId: "doantotnghiep-ae0f8",
-      storageBucket: "doantotnghiep-ae0f8.firebasestorage.app",
-      messagingSenderId: "701901349885",
-      appId: "1:701901349885:web:ccb77f635d55f6bdb6af94"
-    };
-
-    // Xóa toàn bộ dữ liệu attendance cũ (nếu có)
-    var attendanceUrl = firebaseConfig.databaseURL + "/attendance.json";
-    var deleteOptions = {
-      method: "delete"
-    };
-
-    UrlFetchApp.fetch(attendanceUrl, deleteOptions);
-
-    // Xóa dữ liệu người dùng
-    var usersUrl = firebaseConfig.databaseURL + "/users.json";
-    UrlFetchApp.fetch(usersUrl, deleteOptions);
-
-    // Xóa dữ liệu theo ngày
-    var attendanceByDateUrl = firebaseConfig.databaseURL + "/attendance_by_date.json";
-    var response = UrlFetchApp.fetch(attendanceByDateUrl, deleteOptions);
-
-    // Ghi log về việc xóa dữ liệu
-    Logger.log("Đã xóa dữ liệu Firebase: attendance, users, attendance_by_date");
-
-    return {
-      status: "success",
-      message: "Đã xóa dữ liệu Firebase thành công",
-      response: JSON.parse(response.getContentText())
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      message: "Lỗi khi xóa dữ liệu Firebase: " + error.toString()
-    };
-  }
-}
-
 function doGet(e) {
-  var sheet = SpreadsheetApp.openById("1TKl9Zv5HLesK8vLozcb0613mZ2EA093zkz5JnM7UmXY");
-  var sheet1 = sheet.getSheetByName("DANHSACH");
+  var sheet = SpreadsheetApp.openById("1TKl9Zv5HLesK8vLozcb0613mZ2EA093zkz5JnM7UmXY"); 
+  var sheet1 = sheet.getSheetByName("DANHSACH"); 
   var sheet2 = sheet.getSheetByName("DIEMDANH");
 
-  // Cấu hình Firebase
-  var firebaseConfig = {
-    apiKey: "AIzaSyAxAR_UUEaXdJl7SMo8vhbPcDcLvvGSM0w",
-    authDomain: "doantotnghiep-ae0f8.firebaseapp.com",
-    databaseURL: "https://doantotnghiep-ae0f8-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "doantotnghiep-ae0f8",
-    storageBucket: "doantotnghiep-ae0f8.firebasestorage.app",
-    messagingSenderId: "701901349885",
-    appId: "1:701901349885:web:ccb77f635d55f6bdb6af94"
-  };
+  var action = e.parameter.action;
+  var response = {}; // Tạo object JSON phản hồi
 
-  var action = e.parameter.sts;
-  var response = {};
+  if (action == "register") {
+    var rfid = e.parameter.rfid;
+    var name = e.parameter.name;
 
-  if (action == "read") {
-    var data = sheet1.getDataRange().getValues();
-    var result = [];
-
-    for (var i = 1; i < data.length; i++) { // Bỏ dòng tiêu đề
-      result.push(data[i][0]); // UID
-      result.push(data[i][0]); // Code (nếu khác UID thì cần sửa)
-      result.push(data[i][1]); // Name
-    }
-
-    return ContentService.createTextOutput(result.join(",")).setMimeType(ContentService.MimeType.TEXT);
-  }
-  else if (action == "writeuid") {
-    var rfid = e.parameter.uid;
     var data = sheet1.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
       if (data[i][0] == rfid) {
@@ -252,335 +18,62 @@ function doGet(e) {
         return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
       }
     }
-    sheet1.appendRow([rfid, "Tên mới"]);
+
+    sheet1.appendRow([rfid, name]);
     response.status = "success";
     response.message = "Đăng ký thành công";
     return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-  }
-  else if (action == "writelog") {
-    var uid = e.parameter.uid;
-    var name = e.parameter.name;
+
+  } else if (action == "checkin") {
+    var rfid = e.parameter.rfid;
     var date = new Date();
     var time = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm:ss");
     var today = Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
-    var timestamp = date.getTime();
 
-    // Kiểm tra xem có tham số inout được truyền vào không
-    var inout = e.parameter.inout;
-
-    // Nếu không có tham số inout, tự động xác định dựa trên trạng thái hiện tại
-    if (!inout) {
-      try {
-        // URL để truy cập dữ liệu người dùng trên Firebase
-        var userUrl = firebaseConfig.databaseURL + "/users/" + uid + ".json";
-
-        // Kiểm tra xem người dùng đã có dữ liệu chưa
-        var checkOptions = {
-          method: "get",
-          muteHttpExceptions: true
-        };
-
-        var checkResponse = UrlFetchApp.fetch(userUrl, checkOptions);
-        var existingData = null;
-
-        if (checkResponse.getResponseCode() == 200) {
-          var responseText = checkResponse.getContentText();
-          if (responseText && responseText != "null") {
-            existingData = JSON.parse(responseText);
-          }
-        }
-
-        // Xác định trạng thái vào/ra dựa trên dữ liệu hiện tại
-        Logger.log("Dữ liệu hiện tại của UID " + uid + ": " + JSON.stringify(existingData));
-        if (existingData && existingData.current && existingData.current.inout) {
-          Logger.log("Trạng thái hiện tại của UID " + uid + ": " + existingData.current.inout);
-          // Kiểm tra thời gian chờ tối thiểu (2 phút = 120000ms)
-          var minWaitTime = 120000; // 2 phút
-          var currentTime = timestamp;
-          var lastUpdateTime = existingData.lastUpdated || 0;
-          var timeDiff = currentTime - lastUpdateTime;
-
-          Logger.log("Thời gian hiện tại: " + new Date(currentTime).toISOString());
-          Logger.log("Thời gian cập nhật cuối: " + new Date(lastUpdateTime).toISOString());
-          Logger.log("Chênh lệch thời gian: " + timeDiff + "ms (" + Math.floor(timeDiff/1000) + " giây)");
-
-          // Nếu thời gian giữa hai lần quét quá ngắn, giữ nguyên trạng thái và thông báo
-          if (timeDiff < minWaitTime) {
-            // Tính thời gian còn lại phải chờ (đổi từ ms sang giây)
-            var waitTimeLeft = Math.ceil((minWaitTime - timeDiff) / 1000);
-
-            // Trả về lỗi với thông tin thời gian chờ
-            response.status = "error";
-            response.message = "Vui lòng chờ " + waitTimeLeft + " giây nữa trước khi quét lại";
-            response.data = {
-              uid: uid,
-              name: name,
-              current_status: existingData.current.inout,
-              wait_time_left: waitTimeLeft
-            };
-            return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-          }
-
-          // Kiểm tra số lần chuyển đổi trạng thái trong ngày
-          var todayKey = today.replace(/-/g, "");
-          var statusChanges = existingData.status_changes || {};
-          var todayChanges = statusChanges[todayKey] || 0;
-          var maxChangesPerDay = 10; // Giới hạn 10 lần chuyển đổi mỗi ngày
-
-          if (todayChanges >= maxChangesPerDay) {
-            // Nếu đã vượt quá giới hạn, giữ nguyên trạng thái và thông báo
-            response.status = "error";
-            response.message = "Đã vượt quá giới hạn " + maxChangesPerDay + " lần chuyển đổi trạng thái trong ngày";
-            response.data = {
-              uid: uid,
-              name: name,
-              current_status: existingData.current.inout,
-              changes_today: todayChanges,
-              max_changes: maxChangesPerDay
-            };
-            return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-          }
-
-          // Nếu trạng thái hiện tại là "vào", đổi thành "ra"
-          if (existingData.current.inout === "vào") {
-            inout = "ra";
-            Logger.log("Chuyển đổi trạng thái từ VÀO sang RA cho UID: " + uid);
-          }
-          // Nếu trạng thái hiện tại là "ra", đổi thành "vào"
-          else if (existingData.current.inout === "ra") {
-            inout = "vào";
-            Logger.log("Chuyển đổi trạng thái từ RA sang VÀO cho UID: " + uid);
-          }
-          else {
-            // Trường hợp khác, mặc định là "vào"
-            inout = "vào";
-            Logger.log("Trạng thái không xác định, mặc định là VÀO cho UID: " + uid);
-          }
-
-          // Cập nhật số lần chuyển đổi trạng thái
-          statusChanges[todayKey] = todayChanges + 1;
-
-          // Lưu thông tin số lần chuyển đổi để sử dụng sau
-          e.statusChanges = statusChanges;
-        } else {
-          // Nếu chưa có dữ liệu, mặc định là "vào"
-          inout = "vào";
-
-          // Khởi tạo số lần chuyển đổi trạng thái
-          var todayKey = today.replace(/-/g, "");
-          var statusChanges = {};
-          statusChanges[todayKey] = 1;
-
-          // Lưu thông tin số lần chuyển đổi để sử dụng sau
-          e.statusChanges = statusChanges;
-        }
-      } catch (error) {
-        // Nếu có lỗi khi kiểm tra, mặc định là "vào"
-        inout = "vào";
-        Logger.log("Lỗi khi kiểm tra trạng thái hiện tại: " + error.toString());
+    var studentName = "";
+    var data = sheet1.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] == rfid) {
+        studentName = data[i][1];
+        break;
       }
     }
 
-    // Ghi dữ liệu vào Google Sheet
-    sheet2.appendRow([today, time, uid, name, inout]);
-
-    try {
-      // Ghi dữ liệu vào Firebase
-      var logData = {
-        date: today,
-        time: time,
-        uid: uid,
-        name: name,
-        inout: inout,
-        timestamp: timestamp
-      };
-
-      // Lấy thông tin số lần chuyển đổi trạng thái (nếu có)
-      var statusChanges = e.statusChanges || {};
-
-      // Tạo một key duy nhất dựa trên timestamp và uid
-      var logKey = timestamp + "_" + uid;
-
-      // URL để ghi dữ liệu vào Firebase Realtime Database
-      var firebaseUrl = firebaseConfig.databaseURL + "/attendance/" + logKey + ".json";
-
-      // Gửi dữ liệu đến Firebase
-      var options = {
-        method: "put",
-        contentType: "application/json",
-        payload: JSON.stringify(logData)
-      };
-
-      var firebaseResponse = UrlFetchApp.fetch(firebaseUrl, options);
-
-      // Cập nhật dữ liệu người dùng
-      var userUrl = firebaseConfig.databaseURL + "/users/" + uid + ".json";
-
-      // Kiểm tra xem người dùng đã có dữ liệu chưa
-      var checkOptions = {
-        method: "get",
-        muteHttpExceptions: true
-      };
-
-      var checkResponse = UrlFetchApp.fetch(userUrl, checkOptions);
-      var existingData = null;
-
-      if (checkResponse.getResponseCode() == 200) {
-        var responseText = checkResponse.getContentText();
-        if (responseText && responseText != "null") {
-          existingData = JSON.parse(responseText);
-        }
-      }
-
-      var userData = {};
-
-      if (existingData) {
-        // Nếu đã có dữ liệu, lưu dữ liệu hiện tại vào lịch sử
-        var history = existingData.history || [];
-
-        // Thêm dữ liệu hiện tại vào lịch sử
-        if (existingData.current) {
-          history.push(existingData.current);
-        }
-
-        // Giới hạn lịch sử chỉ lưu 10 bản ghi gần nhất
-        if (history.length > 10) {
-          history = history.slice(history.length - 10);
-        }
-
-        // Cập nhật dữ liệu mới
-        userData = {
-          current: logData,
-          history: history,
-          lastUpdated: timestamp,
-          status_changes: statusChanges
-        };
-      } else {
-        // Nếu chưa có dữ liệu, tạo mới
-        userData = {
-          current: logData,
-          history: [],
-          lastUpdated: timestamp,
-          status_changes: statusChanges
-        };
-      }
-
-      // Gửi dữ liệu người dùng đến Firebase
-      var userOptions = {
-        method: "put",
-        contentType: "application/json",
-        payload: JSON.stringify(userData)
-      };
-
-      UrlFetchApp.fetch(userUrl, userOptions);
-
-      // Lưu thêm vào bảng attendance_by_date để dễ truy vấn theo ngày
-      var dateKey = today.replace(/-/g, ""); // Chuyển yyyy-MM-dd thành yyyyMMdd
-      var attendanceUrl = firebaseConfig.databaseURL + "/attendance_by_date/" + dateKey + "/" + uid + ".json";
-
-      UrlFetchApp.fetch(attendanceUrl, {
-        method: "put",
-        contentType: "application/json",
-        payload: JSON.stringify(logData)
-      });
-
-      // Xác định thông báo dựa trên trạng thái
-      var statusMessage = "";
-      if (inout === "vào") {
-        statusMessage = "Bạn đã điểm danh VÀO thành công";
-      } else if (inout === "ra") {
-        statusMessage = "Bạn đã điểm danh RA thành công";
-      } else {
-        statusMessage = "Bạn đã điểm danh thành công";
-      }
-
-      response.status = "success";
-      response.message = statusMessage + " (Đã ghi log vào Google Sheet và Firebase)";
-      response.data = {
-        uid: uid,
-        name: name,
-        date: today,
-        time: time,
-        inout: inout,
-        previous_status: existingData && existingData.current ? existingData.current.inout : null,
-        auto_detected: !e.parameter.inout // Đánh dấu nếu trạng thái được tự động xác định
-      };
-      return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-    } catch (error) {
-      // Nếu có lỗi khi ghi vào Firebase, vẫn trả về thành công vì đã ghi được vào Google Sheet
-      // Xác định thông báo dựa trên trạng thái
-      var statusMessage = "";
-      if (inout === "vào") {
-        statusMessage = "Bạn đã điểm danh VÀO thành công";
-      } else if (inout === "ra") {
-        statusMessage = "Bạn đã điểm danh RA thành công";
-      } else {
-        statusMessage = "Bạn đã điểm danh thành công";
-      }
-
-      response.status = "partial_success";
-      response.message = statusMessage + " (Đã ghi log vào Google Sheet nhưng có lỗi khi ghi vào Firebase: " + error.toString() + ")";
-      response.data = {
-        uid: uid,
-        name: name,
-        date: today,
-        time: time,
-        inout: inout,
-        previous_status: existingData && existingData.current ? existingData.current.inout : null,
-        auto_detected: !e.parameter.inout // Đánh dấu nếu trạng thái được tự động xác định
-      };
+    if (studentName == "") {
+      response.status = "error";
+      response.message = "Thẻ chưa đăng ký";
       return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
     }
-  }
 
-  response.status = "error";
-  response.message = "Hành động không hợp lệ";
-  return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-}
+    sheet2.appendRow([today, time, rfid, studentName, "Vào"]);
+    response.status = "success";
+    response.message = "Điểm danh thành công";
+    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
 
-// Hàm xử lý các yêu cầu POST (dành cho quản trị)
-function doPost(e) {
-  var action = e.parameter.action;
-  var response = {};
+  } else if (action == "checkout") {
+    var rfid = e.parameter.rfid;
+    var date = new Date();
+    var time = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm:ss");
+    var today = Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd");
 
-  // Kiểm tra mật khẩu quản trị
-  var adminPassword = e.parameter.password;
-  if (adminPassword !== "admin123") {
-    response.status = "error";
-    response.message = "Mật khẩu không đúng";
-    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-  }
+    var studentName = "";
+    var data = sheet1.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] == rfid) {
+        studentName = data[i][1];
+        break;
+      }
+    }
 
-  if (action == "sync") {
-    // Đồng bộ dữ liệu từ Google Sheet sang Firebase
-    var result = syncToFirebase();
+    if (studentName == "") {
+      response.status = "error";
+      response.message = "Thẻ chưa đăng ký";
+      return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    sheet2.appendRow([today, time, rfid, studentName, "Ra"]);
     response.status = "success";
-    response.message = "Đã đồng bộ dữ liệu thành công";
-    response.details = result;
-    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-  }
-  else if (action == "clear") {
-    // Xóa dữ liệu trên Firebase
-    var result = clearFirebaseData();
-    response.status = "success";
-    response.message = "Đã xóa dữ liệu Firebase thành công";
-    response.details = result;
-    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-  }
-  else if (action == "test") {
-    // Kiểm tra kết nối Firebase
-    var result = testFirebaseConnection();
-    response.status = "success";
-    response.message = "Đã kiểm tra kết nối Firebase";
-    response.details = result;
-    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
-  }
-  else if (action == "createTrigger") {
-    // Tạo trigger tự động đồng bộ
-    var result = createSyncTrigger();
-    response.status = "success";
-    response.message = "Đã tạo trigger tự động đồng bộ";
-    response.details = result;
+    response.message = "Điểm danh giờ ra thành công";
     return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
   }
 
