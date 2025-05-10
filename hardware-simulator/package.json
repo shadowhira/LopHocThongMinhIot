@@ -1,0 +1,18 @@
+{
+  "name": "hardware-simulator",
+  "version": "1.0.0",
+  "description": "Mô phỏng phần cứng và tạo dữ liệu cho Firebase Realtime Database",
+  "main": "firebase-data-generator.js",
+  "scripts": {
+    "start": "node firebase-data-generator.js",
+    "alert": "node create-alert.js",
+    "sensor": "node update-sensor.js",
+    "attendance": "node simulate-attendance.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "firebase": "^10.7.1"
+  }
+}

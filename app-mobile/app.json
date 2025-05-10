@@ -24,6 +24,22 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3e3d0144-fffa-491c-a187-398910caf332"
+      }
+    },
+    "owner": "shadowhira",
+    "projectId": "3e3d0144-fffa-491c-a187-398910caf332",
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#ffffff"
+        }
+      ]
+    ]
   }
 }
