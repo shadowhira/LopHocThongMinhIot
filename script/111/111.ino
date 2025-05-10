@@ -22,10 +22,13 @@
 #define FLAME_PIN 25
 
 // Firebase & WiFi
-#define API_KEY "AIzaSyAxAR_UUEaXdJl7SMo8vhbPcDcLvvGSM0w"
-#define DATABASE_URL "https://doantotnghiep-ae0f8-default-rtdb.asia-southeast1.firebasedatabase.app/"
-const char* ssid = "Tenda_189718";
-const char* password = "88888888";
+// Firebase config
+#define API_KEY "AIzaSyDUxUmjO2IpXlttgYnGtogv6DRbXE8Aqm8"
+#define FIREBASE_PROJECT_ID "phucdu-b1fb2"
+#define USER_EMAIL "phucdu@gmail.com"
+#define USER_PASSWORD "banbanhmy"
+const char* ssid = "Xuantruong";
+const char* password = "1234567890";
 const char* scriptUrl = "https://script.google.com/macros/s/AKfycbxzjxuyfTwyfeiC58acN-kOGSL5VbzS_I5SfgOAM77Jc8hmagMKqLHdpygwcuxNc_0s/exec";
 
 // DHT & OLED
@@ -41,10 +44,9 @@ Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 float Ro = 10.0;
 float A = 1000;
 float B = -2.2;
-bool signupOK = false;
 
 // Firebase
-FirebaseData firebaseData;
+FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
@@ -66,11 +68,10 @@ void setup() {
 
   // Khởi tạo Firebase
   config.api_key = API_KEY;
-  config.database_url = DATABASE_URL;
-  if (Firebase.signUp(&config, &auth, "", "")) {
-      signupOK = true;
-    }
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
   config.token_status_callback = tokenStatusCallback;
+
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
 
@@ -102,7 +103,7 @@ void loop() {
   cardID.toUpperCase();
   Serial.println("\n📌 Mã thẻ: " + cardID);
 
-  checkInSuccess = sendToGoogleSheets(cardID, checkOut);
+  bool checkInSuccess = sendToGoogleSheets(cardID, checkOut);
   bool firebaseSuccess = sendToFirebase(cardID, checkOut);
   delay(2000);
 
@@ -121,17 +122,26 @@ void updateSensors() {
   bool fireDetected = (flame_status == 0);
   bool gasDanger = (gas_ppm > 1000);
   String status = (fireDetected || gasDanger) ? "NGUY HIEM" : "AN TOAN";
-  String flame= fireDetected ? "FIRE!" : "no fire";
+  String flame = fireDetected ? "FIRE!" : "no fire";
+  FirebaseJson content;
+  String sensorPath = "sensors/data";  //Collection: sensors
 
+  content.set("fields/temperature/doubleValue", String(temp, 2));
+  content.set("fields/humidity/doubleValue", String(humi, 2));
+  content.set("fields/gas/doubleValue", String(gas_ppm, 2));
+  content.set("fields/status/stringValue", status);
+  content.set("fields/fire/stringValue", flame);
+  if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", sensorPath.c_str(), content.raw(), "temperature,humidity,gas,status,fire")) {
+    Serial.println("✅ Gửi dữ liệu thành công!");
+    Serial.println(fbdo.payload());
+  } else {
+    Serial.println("❌ Lỗi gửi dữ liệu:");
+    Serial.println(fbdo.errorReason());
+  }
   Serial.printf("Gas: %.0f ppm | Temp: %.1f C | Humi: %.1f %% | %s\n",
                 gas_ppm, temp, humi, fireDetected ? "FIRE!" : "Safe");
 
   digitalWrite(BUZZER_PIN, fireDetected || gasDanger ? HIGH : LOW);
-  Firebase.RTDB.setFloat(&firebaseData, "Gas", gas_ppm);
-  Firebase.RTDB.setFloat(&firebaseData, "Temp", temp);
-  Firebase.RTDB.setFloat(&firebaseData, "Humidity", humi);
-  Firebase.RTDB.setString(&firebaseData, "Status",status);
-  Firebase.RTDB.setString(&firebaseData, "Fire",flame);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
@@ -178,14 +188,18 @@ bool sendToGoogleSheets(String cardID, bool isCheckOut) {
 }
 
 bool sendToFirebase(String cardID, bool isCheckOut) {
-  String path = "/attendance/" + cardID;
+  FirebaseJson content;
+  String cardPath = "sensors/attendance";  // Collection: sensors
   String state = isCheckOut ? "checkout" : "checkin";
-  String timeStamp = String(millis());
-  Firebase.RTDB.setString(&firebaseData, path + "/status", state);
-  Firebase.RTDB.setString(&firebaseData, path + "/time", timeStamp);
-  if (firebaseData.httpCode() == HTTP_CODE_OK) return true;
-  else {
-    Serial.println("Firebase error: " + firebaseData.errorReason());
+  content.set("fields/CardID/stringValue", cardID);
+  content.set("fields/State/stringValue", state);
+  if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", cardPath.c_str(), content.raw(), "CardID,State")) {
+    Serial.println("✅ Gửi dữ liệu  card ID thành công!");
+    Serial.println(fbdo.payload());
+    return true;
+  } else {
+    Serial.println("❌ Lỗi gửi dữ liệu card ID:");
+    Serial.println(fbdo.errorReason());
     return false;
   }
 }
