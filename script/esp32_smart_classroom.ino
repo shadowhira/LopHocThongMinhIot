@@ -302,15 +302,26 @@ void loop() {
   cardID.toUpperCase();
   Serial.println("\n📌 Mã thẻ: " + cardID);
 
+  // Kiểm tra xem sinh viên có tồn tại không
+  bool studentExists = false;
+  if (Firebase.RTDB.getString(&fbdo, "students/" + cardID + "/name")) {
+    studentExists = true;
+  }
+
   bool firebaseSuccess = sendToFirebase(cardID, checkOut);
   delay(2000);
 
+  // Hiển thị thông báo dựa trên kết quả xử lý
   if (firebaseSuccess) {
     displayCheckInSuccess();
-    Serial.println("✅ Firebase OK");
+    Serial.println("✅ Điểm danh thành công");
   } else {
     displayCheckInFailed();
-    Serial.println("❌ Firebase lỗi");
+    if (!studentExists) {
+      Serial.println("❌ Thẻ không được đăng ký trong hệ thống");
+    } else {
+      Serial.println("❌ Lỗi xử lý");
+    }
   }
 }
 
@@ -868,10 +879,66 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
     // Lấy ngày hiện tại theo định dạng YYYYMMDD
     String date = getCurrentDateString(); // Sử dụng hàm lấy ngày hiện tại
 
+    // Kiểm tra trạng thái chế độ tự động cửa
+    if (Firebase.RTDB.getBool(&fbdo, "devices/auto/door")) {
+      doorAutoMode = fbdo.boolData();
+      Serial.print("Chế độ tự động cửa: ");
+      Serial.println(doorAutoMode ? "BẬT" : "TẮT");
+    }
+
     // Lấy thông tin sinh viên
     String studentName = "Unknown";
+    bool studentExists = false;
     if (Firebase.RTDB.getString(&fbdo, "students/" + cardID + "/name")) {
       studentName = fbdo.stringData();
+      studentExists = true;
+    } else {
+      Serial.println("❌ Không tìm thấy sinh viên với RFID: " + cardID);
+
+      // Ghi lại thông tin về lần quẹt thẻ không hợp lệ
+      FirebaseJson unregisteredJson;
+      unsigned long currentTime = getCurrentTimestamp();
+
+      // Tạo ID duy nhất cho lần quẹt thẻ này
+      String swipeId = String(currentTime);
+
+      // Đường dẫn để lưu thông tin quẹt thẻ không hợp lệ
+      String unregisteredPath = "unregistered_swipes/" + date + "/" + cardID;
+
+      // Thêm thông tin về lần quẹt thẻ
+      unregisteredJson.set("timestamp", currentTime);
+      unregisteredJson.set("cardId", cardID);
+      unregisteredJson.set("doorAutoMode", doorAutoMode);
+
+      // Lấy thời gian đầy đủ để ghi log
+      struct tm timeinfo;
+      time_t now = currentTime;
+      localtime_r(&now, &timeinfo);
+      char timeStr[30];
+      strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+      unregisteredJson.set("time", String(timeStr));
+
+      // Gửi dữ liệu lên Firebase
+      if (Firebase.RTDB.updateNode(&fbdo, unregisteredPath, &unregisteredJson)) {
+        Serial.println("✅ Đã ghi lại thông tin quẹt thẻ không hợp lệ");
+      } else {
+        Serial.println("❌ Lỗi ghi thông tin quẹt thẻ không hợp lệ: " + fbdo.errorReason());
+      }
+
+      // Nếu sinh viên không tồn tại, vẫn trả về false vì không cho phép mở cửa
+      return false;
+    }
+
+    // Mở cửa khi quẹt thẻ nếu chế độ tự động được bật và thẻ đã được đăng ký
+    if (doorAutoMode && studentExists) {
+      Serial.println("🚪 Mở cửa tự động khi quẹt thẻ đã đăng ký");
+      controlDoor(true);
+      lastDoorOpened = millis();
+    }
+
+    // Nếu sinh viên không tồn tại, không xử lý điểm danh
+    if (!studentExists) {
+      return false;
     }
 
     // Cập nhật dữ liệu điểm danh
@@ -927,20 +994,6 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
     Serial.print(checkOutHour);
     Serial.print(":");
     Serial.println(checkOutMinute);
-
-    // Kiểm tra trạng thái chế độ tự động cửa
-    if (Firebase.RTDB.getBool(&fbdo, "devices/auto/door")) {
-      doorAutoMode = fbdo.boolData();
-      Serial.print("Chế độ tự động cửa: ");
-      Serial.println(doorAutoMode ? "BẬT" : "TẮT");
-    }
-
-    // Mở cửa khi quẹt thẻ, bất kể là điểm danh vào hay ra
-    if (doorAutoMode) {
-      Serial.println("🚪 Mở cửa tự động khi quẹt thẻ");
-      controlDoor(true);
-      lastDoorOpened = millis();
-    }
 
     if (isCheckOut) {
       // Nếu là điểm danh ra
@@ -1000,6 +1053,14 @@ void displayCheckInSuccess() {
   display.setTextColor(SH110X_WHITE);
   display.setCursor(0, 20);
   display.println("✅ Thanh cong");
+
+  // Hiển thị thông tin về chế độ tự động cửa
+  display.setTextSize(1);
+  if (doorAutoMode) {
+    display.setCursor(0, 45);
+    display.println("Che do tu dong: BAT");
+  }
+
   display.display();
   delay(2000);
   isDisplayingMessage = false;
@@ -1012,6 +1073,12 @@ void displayCheckInFailed() {
   display.setTextColor(SH110X_WHITE);
   display.setCursor(0, 20);
   display.println("❌ That bai");
+
+  // Kiểm tra xem thẻ có tồn tại không
+  display.setTextSize(1);
+  display.setCursor(0, 45);
+  display.println("The khong duoc dang ky");
+
   display.display();
   delay(2000);
   isDisplayingMessage = false;

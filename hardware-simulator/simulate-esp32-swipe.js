@@ -1,6 +1,6 @@
 // Script để mô phỏng việc quẹt thẻ với ESP32 đã được cập nhật
 const { initializeApp } = require('firebase/app');
-const { getDatabase, ref, set, get } = require('firebase/database');
+const { getDatabase, ref, set, get, update } = require('firebase/database');
 
 // Cấu hình Firebase
 const firebaseConfig = {
@@ -34,11 +34,54 @@ async function simulateCardSwipe(cardId, isCheckOut = false) {
     const studentRef = ref(db, `students/${cardId}`);
     const studentSnapshot = await get(studentRef);
 
-    let studentName = "Unknown";
-    if (studentSnapshot.exists()) {
-      studentName = studentSnapshot.val().name;
+    // Nếu sinh viên không tồn tại, ghi lại thông tin và không xử lý điểm danh
+    if (!studentSnapshot.exists()) {
+      console.error(`❌ Không tìm thấy sinh viên với RFID: ${cardId}`);
+
+      // Ghi lại thông tin về lần quẹt thẻ không hợp lệ
+      const currentTime = Date.now();
+
+      // Đường dẫn để lưu thông tin quẹt thẻ không hợp lệ
+      const unregisteredPath = `unregistered_swipes/${date}/${cardId}`;
+
+      // Tạo đối tượng dữ liệu
+      const unregisteredData = {
+        timestamp: currentTime,
+        cardId: cardId,
+        doorAutoMode: doorAutoMode,
+        time: new Date().toLocaleTimeString()
+      };
+
+      // Gửi dữ liệu lên Firebase
+      try {
+        await update(ref(db, unregisteredPath), unregisteredData);
+        console.log('✅ Đã ghi lại thông tin quẹt thẻ không hợp lệ');
+      } catch (error) {
+        console.error('❌ Lỗi ghi thông tin quẹt thẻ không hợp lệ:', error);
+      }
+
+      return;
     }
 
+    // Kiểm tra trạng thái chế độ tự động cửa (giống ESP32)
+    const autoRef = ref(db, 'devices/auto/door');
+    const autoSnapshot = await get(autoRef);
+    const doorAutoMode = autoSnapshot.exists() && autoSnapshot.val() === true;
+
+    // Mở cửa khi quẹt thẻ nếu chế độ tự động được bật và thẻ đã được đăng ký
+    if (doorAutoMode && studentSnapshot.exists()) {
+      // Mở cửa
+      await update(ref(db, 'devices/status'), { door1: true });
+      console.log('🚪 Cửa tự động mở khi quẹt thẻ đã đăng ký');
+
+      // Đóng cửa sau 5 giây
+      setTimeout(async () => {
+        await update(ref(db, 'devices/status'), { door1: false });
+        console.log('🚪 Cửa tự động đóng sau 5 giây');
+      }, 5000);
+    }
+
+    let studentName = studentSnapshot.val().name;
     console.log(`Thông tin sinh viên: ${studentName} (${cardId})`);
 
     // Kiểm tra xem sinh viên đã điểm danh vào chưa
