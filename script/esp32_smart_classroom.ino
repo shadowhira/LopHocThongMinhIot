@@ -67,6 +67,8 @@ MFRC522 mfrc522(SS_PIN, RST_PIN);
 bool checkOut = false;
 bool checkInSuccess = false;
 bool isDisplayingMessage = false;
+int rfidRetryCount = 0;
+const int MAX_RFID_RETRIES = 10; // Tăng lên 10 lần trước khi reset
 
 // Ngưỡng cảnh báo
 float tempMin = 18.0;
@@ -171,7 +173,12 @@ void setup() {
 
   // Khởi tạo các cảm biến và thiết bị
   SPI.begin();
+  SPI.setFrequency(1000000);  // Giảm tần số xuống 1MHz để tăng độ ổn định
   mfrc522.PCD_Init();
+
+  // Tăng gain ăng-ten lên mức tối đa để cải thiện độ nhạy
+  mfrc522.PCD_SetAntennaGain(mfrc522.RxGain_max);
+
   dht.begin();
   pinMode(FLAME_PIN, INPUT);
   pinMode(PIR_PIN, INPUT);
@@ -291,11 +298,31 @@ void loop() {
   // Kiểm tra chế độ tự động
   checkAutoMode(currentMillis);
 
-  // Đọc thẻ RFID
-  if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) {
+  // Đọc thẻ RFID với cơ chế thử lại
+  if (!mfrc522.PICC_IsNewCardPresent()) {
+    delay(100); // Thêm delay lớn hơn
     if (!isDisplayingMessage) updateDisplay();
     return;
   }
+
+  if (!mfrc522.PICC_ReadCardSerial()) {
+    rfidRetryCount++;
+    Serial.print("Không đọc được thẻ, thử lại lần ");
+    Serial.println(rfidRetryCount);
+
+    if (rfidRetryCount >= MAX_RFID_RETRIES) {
+      Serial.println("Đã thử nhiều lần không thành công, reset module RFID...");
+      resetRFID();
+      rfidRetryCount = 0;
+    }
+
+    delay(300); // Thêm delay lớn hơn khi đọc thất bại
+    if (!isDisplayingMessage) updateDisplay();
+    return;
+  }
+
+  // Đọc thành công, reset số lần thử
+  rfidRetryCount = 0;
 
   String cardID = "";
   for (byte i = 0; i < mfrc522.uid.size; i++) cardID += String(mfrc522.uid.uidByte[i], HEX);
@@ -323,6 +350,10 @@ void loop() {
       Serial.println("❌ Lỗi xử lý");
     }
   }
+
+  // Dừng PICC và ngừng mã hóa PCD để chuẩn bị cho lần đọc tiếp theo
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
 }
 
 // Khởi tạo trạng thái thiết bị trên Firebase
@@ -1082,6 +1113,29 @@ void displayCheckInFailed() {
   display.display();
   delay(2000);
   isDisplayingMessage = false;
+}
+
+// Hàm reset RFID
+void resetRFID() {
+  Serial.println("Đang reset module RFID...");
+
+  // Hard reset - tắt và bật lại SPI
+  SPI.end();
+  delay(100);
+  SPI.begin();
+  SPI.setFrequency(1000000);  // Giảm tần số xuống 1MHz
+
+  // Soft reset
+  mfrc522.PCD_Reset();
+  delay(100);
+
+  // Khởi tạo lại
+  mfrc522.PCD_Init();
+
+  // Cấu hình lại
+  mfrc522.PCD_SetAntennaGain(mfrc522.RxGain_max);
+
+  Serial.println("Reset RFID hoàn tất");
 }
 
 // Hàm đồng bộ thời gian NTP
