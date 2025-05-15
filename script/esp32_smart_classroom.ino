@@ -12,6 +12,7 @@
 #include <math.h>
 #include <ESP32Servo.h>
 #include "time.h"
+#include <SPIFFS.h>  // Thêm thư viện SPIFFS
 
 // --- Khai báo chân kết nối ---
 #define SS_PIN 5
@@ -101,6 +102,30 @@ bool lightAutoMode = false;
 bool doorAutoMode = false;
 bool motionDetected = false;
 
+// Cấu hình SPIFFS
+#define SENSORS_FILE "/pending_sensors.json"
+#define ATTENDANCE_FILE "/pending_attendance.json"
+#define ALERTS_FILE "/pending_alerts.json"
+
+// Khai báo hàm (function prototypes)
+void syncNtpTime();
+void resetRFID();
+void displayCheckInSuccess();
+void displayCheckInFailed();
+void updateDisplay();
+void displayDefaultValues(String errorMessage);
+void checkAlerts();
+void createAlert(String type, float value, float threshold, String message);
+unsigned long getCurrentTimestamp();
+String getCurrentDateString();
+bool sendToFirebase(String cardID, bool manualCheckOut);
+float readMQ2(int analogPin);
+void saveSensorDataToSPIFFS(float temp, float humi, float gas, bool flame, String status, unsigned long timestamp);
+void sendPendingSensorData();
+bool checkSPIFFSSpace();
+void removeOldestSensorData();
+void checkFirebaseConnection();
+
 // Thời gian
 unsigned long lastSensorUpdate = 0;
 unsigned long lastAlertCheck = 0;
@@ -110,6 +135,7 @@ unsigned long lastMotionDetected = 0;
 unsigned long lastDoorOpened = 0;
 unsigned long lastNtpSync = 0;
 unsigned long lastThresholdCheck = 0;
+unsigned long lastOfflineSave = 0;
 const unsigned long SENSOR_UPDATE_INTERVAL = 5000; // 5 giây
 const unsigned long ALERT_CHECK_INTERVAL = 10000; // 10 giây
 const unsigned long DEVICE_CHECK_INTERVAL = 1000; // 1 giây
@@ -117,6 +143,7 @@ const unsigned long MOTION_CHECK_INTERVAL = 500; // 0.5 giây
 const unsigned long AUTO_OFF_DELAY = 10000; // 10 giây
 const unsigned long NTP_SYNC_INTERVAL = 3600000; // 1 giờ
 const unsigned long THRESHOLD_CHECK_INTERVAL = 5000; // 5 giây
+const unsigned long OFFLINE_UPDATE_INTERVAL = 60000; // 1 phút khi offline
 
 void IRAM_ATTR buttonPressed() {
   checkOut = !checkOut;
@@ -125,6 +152,13 @@ void IRAM_ATTR buttonPressed() {
 void setup() {
   Serial.begin(115200);
   Serial.println("Khởi động hệ thống lớp học thông minh...");
+
+  // Khởi tạo SPIFFS
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Lỗi khởi tạo SPIFFS!");
+    return;
+  }
+  Serial.println("SPIFFS đã khởi tạo thành công");
 
   // Kết nối WiFi
   WiFi.begin(ssid, password);
@@ -254,6 +288,35 @@ void setup() {
 
   // Kiểm tra kết nối Firebase
   checkFirebaseConnection();
+
+  // Kiểm tra và gửi dữ liệu offline từ SPIFFS
+  if (SPIFFS.exists(SENSORS_FILE)) {
+    Serial.println("\n----- Kiểm tra dữ liệu offline trong SPIFFS -----");
+    Serial.println("✅ Phát hiện dữ liệu offline trong SPIFFS");
+
+    // Đọc thông tin file để hiển thị kích thước
+    File dataFile = SPIFFS.open(SENSORS_FILE, FILE_READ);
+    if (dataFile) {
+      size_t fileSize = dataFile.size();
+      Serial.printf("📊 Kích thước file dữ liệu: %d bytes\n", fileSize);
+      dataFile.close();
+    }
+
+    if (WiFi.status() == WL_CONNECTED && Firebase.ready()) {
+      Serial.println("🔄 Đang gửi dữ liệu offline lên Firebase sau khi khởi động...");
+      sendPendingSensorData();
+    } else {
+      Serial.println("⚠️ Không thể gửi dữ liệu offline, WiFi hoặc Firebase chưa sẵn sàng");
+      Serial.println("💾 Dữ liệu sẽ được giữ lại trong SPIFFS để gửi sau");
+
+      // Kiểm tra trạng thái WiFi và Firebase
+      Serial.printf("📶 Trạng thái WiFi: %s\n", WiFi.status() == WL_CONNECTED ? "Đã kết nối" : "Chưa kết nối");
+      Serial.printf("🔥 Trạng thái Firebase: %s\n", Firebase.ready() ? "Sẵn sàng" : "Chưa sẵn sàng");
+    }
+    Serial.println("----- Kết thúc kiểm tra dữ liệu offline -----\n");
+  } else {
+    Serial.println("ℹ️ Không có dữ liệu offline trong SPIFFS");
+  }
 }
 
 void loop() {
@@ -335,13 +398,22 @@ void loop() {
     studentExists = true;
   }
 
+  // Lưu trữ kết quả điểm danh và thông tin sinh viên
   bool firebaseSuccess = sendToFirebase(cardID, checkOut);
-  delay(2000);
+  delay(500); // Giảm delay xuống để tăng tốc độ phản hồi
 
   // Hiển thị thông báo dựa trên kết quả xử lý
   if (firebaseSuccess) {
+    // Hiển thị thông báo thành công trước
     displayCheckInSuccess();
     Serial.println("✅ Điểm danh thành công");
+
+    // Sau khi hiển thị thông báo, mở cửa nếu chế độ tự động được bật
+    if (doorAutoMode && studentExists) {
+      Serial.println("🚪 Mở cửa tự động khi quẹt thẻ đã đăng ký");
+      controlDoor(true);
+      lastDoorOpened = millis();
+    }
   } else {
     displayCheckInFailed();
     if (!studentExists) {
@@ -688,27 +760,40 @@ void updateSensors() {
   bool tempDanger = (temp < tempMin || temp > tempMax);
   bool humidDanger = (humi < humidMin || humi > humidMax);
   String status = (fireDetected || gasDanger || tempDanger || humidDanger) ? "NGUY HIEM" : "AN TOAN";
+  unsigned long timestamp = getCurrentTimestamp();
 
-  // Cập nhật dữ liệu cảm biến hiện tại
-  if (Firebase.ready()) {
+  // Kiểm tra kết nối WiFi và Firebase
+  if (WiFi.status() == WL_CONNECTED && Firebase.ready()) {
+    // Cập nhật dữ liệu cảm biến hiện tại
     FirebaseJson json;
     json.set("temperature", temp);
     json.set("humidity", humi);
     json.set("gas", gas_ppm);
     json.set("flame", fireDetected);
     json.set("status", status);
-    json.set("updatedAt", getCurrentTimestamp());
+    json.set("updatedAt", timestamp);
 
     if (Firebase.RTDB.updateNode(&fbdo, "sensors/current", &json)) {
       Serial.println("✅ Cập nhật dữ liệu cảm biến thành công");
     } else {
       Serial.println("❌ Lỗi cập nhật dữ liệu cảm biến: " + fbdo.errorReason());
+      // Lưu vào SPIFFS khi không thể gửi lên Firebase
+      saveSensorDataToSPIFFS(temp, humi, gas_ppm, fireDetected, status, timestamp);
     }
 
     // Lưu lịch sử dữ liệu cảm biến
-    String historyPath = "sensors/history/" + String(getCurrentTimestamp());
+    String historyPath = "sensors/history/" + String(timestamp);
     if (Firebase.RTDB.setJSON(&fbdo, historyPath, &json)) {
       Serial.println("✅ Lưu lịch sử cảm biến thành công");
+    } else {
+      Serial.println("❌ Lỗi lưu lịch sử cảm biến: " + fbdo.errorReason());
+    }
+  } else {
+    // Không có kết nối WiFi hoặc Firebase, lưu vào SPIFFS
+    // Chỉ lưu mỗi OFFLINE_UPDATE_INTERVAL để tiết kiệm bộ nhớ
+    if (millis() - lastOfflineSave >= OFFLINE_UPDATE_INTERVAL) {
+      saveSensorDataToSPIFFS(temp, humi, gas_ppm, fireDetected, status, timestamp);
+      lastOfflineSave = millis();
     }
   }
 
@@ -726,7 +811,12 @@ void updateSensors() {
 }
 
 void updateDisplay() {
-  if (Firebase.ready()) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
+
+  // Kiểm tra kết nối Firebase và WiFi
+  if (WiFi.status() == WL_CONNECTED && Firebase.ready()) {
     FirebaseJson json;
     FirebaseData fbdo;
 
@@ -744,34 +834,62 @@ void updateDisplay() {
       json.get(flame, "flame");
       json.get(status, "status");
 
-      display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SH110X_WHITE);
+      // Kiểm tra xem dữ liệu có hợp lệ không
+      bool validData = temperature.success && humidity.success && gas.success && flame.success && status.success;
 
-      display.setCursor(0, 0);
-      display.printf("Gas: %.0f ppm\n", gas.floatValue);
+      if (validData) {
+        display.setCursor(0, 0);
+        display.printf("Gas: %.0f ppm\n", gas.floatValue);
 
-      display.setCursor(0, 10);
-      display.printf("Nhiet do: %.1f C\n", temperature.floatValue);
+        display.setCursor(0, 10);
+        display.printf("Nhiet do: %.1f C\n", temperature.floatValue);
 
-      display.setCursor(0, 20);
-      display.printf("Do am: %.1f %%\n", humidity.floatValue);
+        display.setCursor(0, 20);
+        display.printf("Do am: %.1f %%\n", humidity.floatValue);
 
-      display.setCursor(0, 30);
-      display.printf("Flame: %s\n", flame.boolValue ? "FIRE!" : "Safe");
+        display.setCursor(0, 30);
+        display.printf("Flame: %s\n", flame.boolValue ? "FIRE!" : "Safe");
 
-      display.setCursor(0, 40);
-      display.printf("Status: %s\n", status.stringValue.c_str());
-
-      // Hiển thị trạng thái thiết bị
-      display.setCursor(0, 50);
-      display.printf("Den: %s | Cua: %s",
-                    lightState ? "ON" : "OFF",
-                    doorState ? "MO" : "DONG");
-
-      display.display();
+        display.setCursor(0, 40);
+        display.printf("Status: %s\n", status.stringValue.c_str());
+      } else {
+        // Hiển thị thông báo lỗi dữ liệu
+        displayDefaultValues("Loi du lieu");
+      }
+    } else {
+      // Hiển thị thông báo lỗi đọc dữ liệu
+      displayDefaultValues("Loi doc du lieu");
     }
+  } else {
+    // Hiển thị thông báo mất kết nối
+    displayDefaultValues("Mat ket noi");
   }
+
+  // Hiển thị trạng thái thiết bị (luôn hiển thị)
+  display.setCursor(0, 50);
+  display.printf("Den: %s | Cua: %s",
+                lightState ? "ON" : "OFF",
+                doorState ? "MO" : "DONG");
+
+  display.display();
+}
+
+// Hiển thị giá trị mặc định khi không có dữ liệu
+void displayDefaultValues(String errorMessage) {
+  display.setCursor(0, 0);
+  display.printf("Gas: -- ppm");
+
+  display.setCursor(0, 10);
+  display.printf("Nhiet do: -- C");
+
+  display.setCursor(0, 20);
+  display.printf("Do am: -- %%");
+
+  display.setCursor(0, 30);
+  display.printf("Flame: --");
+
+  display.setCursor(0, 40);
+  display.printf("Status: %s", errorMessage.c_str());
 }
 
 void checkAlerts() {
@@ -960,13 +1078,6 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
       return false;
     }
 
-    // Mở cửa khi quẹt thẻ nếu chế độ tự động được bật và thẻ đã được đăng ký
-    if (doorAutoMode && studentExists) {
-      Serial.println("🚪 Mở cửa tự động khi quẹt thẻ đã đăng ký");
-      controlDoor(true);
-      lastDoorOpened = millis();
-    }
-
     // Nếu sinh viên không tồn tại, không xử lý điểm danh
     if (!studentExists) {
       return false;
@@ -1026,6 +1137,8 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
     Serial.print(":");
     Serial.println(checkOutMinute);
 
+    bool attendanceSuccess = false;
+
     if (isCheckOut) {
       // Nếu là điểm danh ra
       if (hasCheckedIn) {
@@ -1036,7 +1149,7 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
           Serial.println("📝 Điểm danh ra");
         } else {
           Serial.println("⚠️ Sinh viên đã điểm danh ra rồi");
-          return true; // Vẫn trả về true vì không phải lỗi
+          attendanceSuccess = true; // Vẫn coi là thành công vì không phải lỗi
         }
       } else {
         // Nếu chưa điểm danh vào, tạo cả giờ vào và giờ ra
@@ -1054,17 +1167,24 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
         Serial.println("📝 Điểm danh vào");
       } else {
         Serial.println("⚠️ Sinh viên đã điểm danh vào rồi");
-        return true; // Vẫn trả về true vì không phải lỗi
+        attendanceSuccess = true; // Vẫn coi là thành công vì không phải lỗi
       }
     }
 
-    if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &json)) {
-      Serial.println("✅ Cập nhật điểm danh thành công");
-      return true;
-    } else {
-      Serial.println("❌ Lỗi cập nhật điểm danh: " + fbdo.errorReason());
-      return false;
+    // Nếu đã điểm danh trước đó, không cần cập nhật lại
+    if (!attendanceSuccess) {
+      if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &json)) {
+        Serial.println("✅ Cập nhật điểm danh thành công");
+        attendanceSuccess = true;
+      } else {
+        Serial.println("❌ Lỗi cập nhật điểm danh: " + fbdo.errorReason());
+        attendanceSuccess = false;
+      }
     }
+
+    // Không mở cửa ở đây, sẽ mở cửa sau khi hiển thị thông báo thành công
+
+    return attendanceSuccess;
   }
   return false;
 }
@@ -1117,30 +1237,58 @@ void displayCheckInFailed() {
 
 // Hàm reset RFID
 void resetRFID() {
-  Serial.println("Đang reset module RFID...");
+  Serial.println("\n----- Bắt đầu quá trình reset module RFID -----");
+  Serial.println("⚠️ Đang reset module RFID sau nhiều lần đọc thất bại...");
 
   // Hard reset - tắt và bật lại SPI
+  Serial.println("1️⃣ Thực hiện Hard Reset: Tắt SPI");
   SPI.end();
   delay(100);
+
+  Serial.println("2️⃣ Khởi động lại SPI với tần số thấp hơn");
   SPI.begin();
   SPI.setFrequency(1000000);  // Giảm tần số xuống 1MHz
+  Serial.println("✅ Đã khởi động lại SPI với tần số 1MHz");
 
   // Soft reset
+  Serial.println("3️⃣ Thực hiện Soft Reset cho MFRC522");
   mfrc522.PCD_Reset();
   delay(100);
+  Serial.println("✅ Đã reset chip MFRC522");
 
   // Khởi tạo lại
+  Serial.println("4️⃣ Khởi tạo lại module MFRC522");
   mfrc522.PCD_Init();
+  Serial.println("✅ Đã khởi tạo lại module MFRC522");
 
   // Cấu hình lại
+  Serial.println("5️⃣ Cấu hình lại ăng-ten với độ nhạy tối đa");
   mfrc522.PCD_SetAntennaGain(mfrc522.RxGain_max);
+  Serial.println("✅ Đã cấu hình lại ăng-ten với độ nhạy tối đa");
 
-  Serial.println("Reset RFID hoàn tất");
+  // Kiểm tra trạng thái
+  byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  Serial.print("📊 Phiên bản chip MFRC522: 0x");
+  Serial.println(v, HEX);
+
+  if (v == 0x91 || v == 0x92) {
+    Serial.println("✅ Module RFID hoạt động bình thường");
+  } else {
+    Serial.println("⚠️ Phiên bản chip không xác định, có thể gặp vấn đề");
+  }
+
+  Serial.println("✅ Quá trình reset RFID hoàn tất");
+  Serial.println("----- Kết thúc quá trình reset module RFID -----\n");
 }
 
 // Hàm đồng bộ thời gian NTP
 void syncNtpTime() {
-  Serial.println("Đang đồng bộ thời gian NTP...");
+  Serial.println("\n----- Bắt đầu đồng bộ thời gian NTP -----");
+  Serial.println("🕒 Đang đồng bộ thời gian với máy chủ NTP...");
+
+  // Hiển thị thông tin cấu hình NTP
+  Serial.printf("📡 Máy chủ NTP: %s\n", ntpServer);
+  Serial.printf("🌐 Múi giờ: GMT+%d giây (%d giờ)\n", gmtOffset_sec, gmtOffset_sec / 3600);
 
   // Đặt múi giờ và máy chủ NTP
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
@@ -1150,24 +1298,33 @@ void syncNtpTime() {
   const int maxRetries = 5;
   struct tm timeinfo;
 
+  Serial.print("⏳ Đang chờ phản hồi từ máy chủ NTP");
   while (!getLocalTime(&timeinfo) && retry < maxRetries) {
-    Serial.println("Đang chờ đồng bộ thời gian NTP...");
+    Serial.print(".");
     delay(1000);
     retry++;
   }
+  Serial.println();
 
   if (getLocalTime(&timeinfo)) {
     char timeStr[30];
-    strftime(timeStr, sizeof(timeStr), "%A, %B %d %Y %H:%M:%S", &timeinfo);
+    char dateStr[30];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+    strftime(dateStr, sizeof(dateStr), "%A, %B %d %Y", &timeinfo);
 
-    Serial.print("Đã đồng bộ thời gian NTP: ");
-    Serial.println(timeStr);
+    Serial.println("✅ Đã đồng bộ thời gian NTP thành công!");
+    Serial.printf("📅 Ngày: %s\n", dateStr);
+    Serial.printf("🕒 Giờ: %s\n", timeStr);
 
     // Kiểm tra timestamp
     time_t now;
     time(&now);
-    Serial.print("Timestamp hiện tại: ");
-    Serial.println((unsigned long)now);
+    Serial.printf("🔢 Timestamp hiện tại: %lu\n", (unsigned long)now);
+
+    // Hiển thị ngày theo định dạng YYYYMMDD
+    char yyyymmdd[9];
+    strftime(yyyymmdd, sizeof(yyyymmdd), "%Y%m%d", &timeinfo);
+    Serial.printf("📊 Ngày theo định dạng YYYYMMDD: %s\n", yyyymmdd);
 
     // Kiểm tra xem timestamp có hợp lệ không (phải lớn hơn 1/1/2020)
     if (now < 1577836800) { // 1/1/2020 00:00:00 GMT
@@ -1175,106 +1332,487 @@ void syncNtpTime() {
 
       // Thử đồng bộ lại với máy chủ NTP khác
       const char* backupNtpServer = "time.google.com";
-      Serial.print("Đang thử với máy chủ NTP dự phòng: ");
-      Serial.println(backupNtpServer);
+      Serial.printf("🔄 Đang thử với máy chủ NTP dự phòng: %s\n", backupNtpServer);
 
       configTime(gmtOffset_sec, daylightOffset_sec, backupNtpServer);
-      delay(2000);
+
+      Serial.print("⏳ Đang chờ phản hồi từ máy chủ NTP dự phòng");
+      retry = 0;
+      while (!getLocalTime(&timeinfo) && retry < maxRetries) {
+        Serial.print(".");
+        delay(1000);
+        retry++;
+      }
+      Serial.println();
 
       if (getLocalTime(&timeinfo)) {
-        strftime(timeStr, sizeof(timeStr), "%A, %B %d %Y %H:%M:%S", &timeinfo);
-        Serial.print("Đã đồng bộ thời gian NTP (dự phòng): ");
-        Serial.println(timeStr);
+        strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+        strftime(dateStr, sizeof(dateStr), "%A, %B %d %Y", &timeinfo);
+
+        Serial.println("✅ Đã đồng bộ thời gian NTP với máy chủ dự phòng!");
+        Serial.printf("📅 Ngày: %s\n", dateStr);
+        Serial.printf("🕒 Giờ: %s\n", timeStr);
 
         time(&now);
-        Serial.print("Timestamp mới: ");
-        Serial.println((unsigned long)now);
+        Serial.printf("🔢 Timestamp mới: %lu\n", (unsigned long)now);
+
+        // Hiển thị ngày theo định dạng YYYYMMDD
+        strftime(yyyymmdd, sizeof(yyyymmdd), "%Y%m%d", &timeinfo);
+        Serial.printf("📊 Ngày theo định dạng YYYYMMDD: %s\n", yyyymmdd);
+      } else {
+        Serial.println("❌ Không thể đồng bộ với máy chủ NTP dự phòng!");
       }
     }
   } else {
     Serial.println("❌ Không thể đồng bộ thời gian NTP sau nhiều lần thử!");
+    Serial.println("⚠️ Hệ thống sẽ sử dụng thời gian ước tính dựa trên millis()");
+  }
+
+  Serial.println("----- Kết thúc đồng bộ thời gian NTP -----\n");
+}
+
+// Lưu dữ liệu cảm biến vào SPIFFS
+void saveSensorDataToSPIFFS(float temp, float humi, float gas, bool flame, String status, unsigned long timestamp) {
+  Serial.println("\n----- Bắt đầu lưu dữ liệu vào SPIFFS -----");
+  Serial.println("💾 Đang lưu dữ liệu cảm biến vào bộ nhớ SPIFFS...");
+
+  // Hiển thị thông tin dữ liệu sẽ lưu
+  Serial.printf("🌡️ Nhiệt độ: %.1f°C | 💧 Độ ẩm: %.1f%% | 🔥 Gas: %.0f ppm | 🔥 Lửa: %s\n",
+                temp, humi, gas, flame ? "CÓ" : "KHÔNG");
+  Serial.printf("⏱️ Timestamp: %lu | 📊 Trạng thái: %s\n", timestamp, status.c_str());
+
+  // Kiểm tra dung lượng SPIFFS
+  if (!checkSPIFFSSpace()) {
+    Serial.println("⚠️ SPIFFS gần đầy, đang xóa dữ liệu cũ nhất để giải phóng bộ nhớ");
+    removeOldestSensorData();
+  }
+
+  // Đọc dữ liệu hiện có
+  DynamicJsonDocument doc(8192);
+  bool fileExists = SPIFFS.exists(SENSORS_FILE);
+
+  if (fileExists) {
+    Serial.println("📂 File dữ liệu đã tồn tại, đang đọc dữ liệu hiện có...");
+    File file = SPIFFS.open(SENSORS_FILE, FILE_READ);
+    if (file) {
+      size_t fileSize = file.size();
+      Serial.printf("📊 Kích thước file hiện tại: %d bytes\n", fileSize);
+
+      DeserializationError error = deserializeJson(doc, file);
+      file.close();
+
+      if (error) {
+        Serial.printf("❌ Lỗi đọc file JSON: %s\n", error.c_str());
+        Serial.println("🔄 Tạo mới cấu trúc dữ liệu");
+        doc.clear();
+        doc.to<JsonArray>();
+      } else {
+        JsonArray array = doc.as<JsonArray>();
+        Serial.printf("✅ Đọc thành công, có %d bản ghi hiện có\n", array.size());
+      }
+    }
+  } else {
+    // Tạo mảng mới nếu file không tồn tại
+    Serial.println("📂 File dữ liệu chưa tồn tại, tạo mới cấu trúc dữ liệu");
+    doc.to<JsonArray>();
+  }
+
+  // Thêm dữ liệu mới
+  Serial.println("➕ Đang thêm bản ghi mới vào danh sách...");
+  JsonArray array = doc.as<JsonArray>();
+  JsonObject obj = array.createNestedObject();
+  obj["temperature"] = temp;
+  obj["humidity"] = humi;
+  obj["gas"] = gas;
+  obj["flame"] = flame;
+  obj["status"] = status;
+  obj["timestamp"] = timestamp;
+
+  // Hiển thị số lượng bản ghi sau khi thêm
+  Serial.printf("📊 Tổng số bản ghi sau khi thêm: %d\n", array.size());
+
+  // Lưu lại vào file
+  Serial.println("💾 Đang ghi dữ liệu vào SPIFFS...");
+  File file = SPIFFS.open(SENSORS_FILE, FILE_WRITE);
+  if (file) {
+    size_t bytesWritten = serializeJson(doc, file);
+    file.close();
+    Serial.printf("✅ Đã lưu thành công %d bytes dữ liệu vào SPIFFS\n", bytesWritten);
+
+    // Kiểm tra lại dung lượng SPIFFS sau khi lưu
+    unsigned long totalBytes = SPIFFS.totalBytes();
+    unsigned long usedBytes = SPIFFS.usedBytes();
+    float usedPercentage = (float)usedBytes / totalBytes * 100;
+    Serial.printf("📊 SPIFFS sau khi lưu: %u/%u bytes (%.1f%%)\n",
+                 usedBytes, totalBytes, usedPercentage);
+  } else {
+    Serial.println("❌ Lỗi mở file để ghi dữ liệu");
+  }
+
+  Serial.println("----- Kết thúc lưu dữ liệu vào SPIFFS -----\n");
+}
+
+// Gửi dữ liệu cảm biến đang chờ
+void sendPendingSensorData() {
+  Serial.println("\n----- Bắt đầu gửi dữ liệu từ SPIFFS lên Firebase -----");
+
+  if (!SPIFFS.exists(SENSORS_FILE)) {
+    Serial.println("ℹ️ Không có dữ liệu đang chờ để gửi trong SPIFFS");
+    Serial.println("----- Kết thúc quá trình gửi dữ liệu -----\n");
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ Không thể gửi dữ liệu: Không có kết nối WiFi");
+    Serial.println("💾 Dữ liệu sẽ được giữ lại trong SPIFFS để gửi sau");
+    Serial.println("----- Kết thúc quá trình gửi dữ liệu -----\n");
+    return;
+  }
+
+  if (!Firebase.ready()) {
+    Serial.println("⚠️ Firebase chưa sẵn sàng, đang thử làm mới token...");
+
+    // Đặt lại cấu hình Firebase
+    config.api_key = API_KEY;
+    config.database_url = DATABASE_URL;
+
+    // Đặt lại thông tin xác thực
+    auth.user.email = USER_EMAIL;
+    auth.user.password = USER_PASSWORD;
+
+    // Khởi tạo lại Firebase
+    Firebase.begin(&config, &auth);
+
+    // Đợi token được cấp
+    unsigned long startTime = millis();
+    Serial.print("Đang chờ token Firebase");
+    while (!Firebase.ready() && millis() - startTime < 10000) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (!Firebase.ready()) {
+      Serial.println("❌ Không thể làm mới token Firebase, sẽ thử lại sau");
+      Serial.println("💾 Dữ liệu vẫn được giữ lại trong SPIFFS");
+      Serial.println("----- Kết thúc quá trình gửi dữ liệu -----\n");
+      return;
+    }
+
+    Serial.println("✅ Token Firebase đã được làm mới thành công");
+  }
+
+  Serial.println("🔄 Đang đọc dữ liệu từ SPIFFS...");
+
+  File file = SPIFFS.open(SENSORS_FILE, FILE_READ);
+  if (!file) {
+    Serial.println("❌ Lỗi mở file SPIFFS để đọc");
+    Serial.println("----- Kết thúc quá trình gửi dữ liệu -----\n");
+    return;
+  }
+
+  size_t fileSize = file.size();
+  Serial.printf("📊 Kích thước file: %d bytes\n", fileSize);
+
+  String fileContent = file.readString();
+  file.close();
+
+  // Kiểm tra nội dung file (chỉ hiển thị 100 ký tự đầu tiên để tránh log quá dài)
+  if (fileContent.length() > 100) {
+    Serial.println("📄 Nội dung file (100 ký tự đầu):");
+    Serial.println(fileContent.substring(0, 100) + "...");
+  } else {
+    Serial.println("📄 Nội dung file:");
+    Serial.println(fileContent);
+  }
+
+  DynamicJsonDocument doc(8192);
+  DeserializationError error = deserializeJson(doc, fileContent);
+
+  if (error) {
+    Serial.println("❌ Lỗi đọc file JSON: " + String(error.c_str()));
+    Serial.println("🗑️ Xóa file JSON không hợp lệ");
+    SPIFFS.remove(SENSORS_FILE);
+    Serial.println("----- Kết thúc quá trình gửi dữ liệu -----\n");
+    return;
+  }
+
+  JsonArray array = doc.as<JsonArray>();
+  Serial.printf("📦 Có %d bản ghi cần gửi lên Firebase\n", array.size());
+
+  if (array.size() == 0) {
+    Serial.println("ℹ️ Không có bản ghi nào, xóa file");
+    SPIFFS.remove(SENSORS_FILE);
+    Serial.println("----- Kết thúc quá trình gửi dữ liệu -----\n");
+    return;
+  }
+
+  bool allSent = true;
+  int sentCount = 0;
+
+  // Lưu lại bản ghi cuối cùng để cập nhật dữ liệu hiện tại
+  FirebaseJson lastJson;
+
+  Serial.println("🔄 Bắt đầu gửi từng bản ghi lên Firebase...");
+
+  for (size_t i = 0; i < array.size(); i++) {
+    JsonObject obj = array[i];
+
+    // Tạo JSON để gửi lên Firebase
+    FirebaseJson json;
+    json.set("temperature", obj["temperature"].as<float>());
+    json.set("humidity", obj["humidity"].as<float>());
+    json.set("gas", obj["gas"].as<float>());
+    json.set("flame", obj["flame"].as<bool>());
+    json.set("status", obj["status"].as<String>());
+    json.set("updatedAt", obj["timestamp"].as<unsigned long>());
+
+    // Lưu lại JSON cuối cùng
+    if (i == array.size() - 1) {
+      lastJson = json;
+    }
+
+    // Lưu vào lịch sử
+    String historyPath = "sensors/history/" + String(obj["timestamp"].as<unsigned long>());
+
+    // Hiển thị thông tin bản ghi đang gửi
+    Serial.printf("🔄 Đang gửi bản ghi %d/%d - Timestamp: %lu\n",
+                 (int)i + 1, (int)array.size(), obj["timestamp"].as<unsigned long>());
+
+    if (!Firebase.RTDB.setJSON(&fbdo, historyPath.c_str(), &json)) {
+      Serial.printf("❌ Lỗi gửi bản ghi %d: %s\n", (int)i + 1, fbdo.errorReason().c_str());
+      allSent = false;
+      break;
+    }
+
+    sentCount++;
+    Serial.printf("✅ Đã gửi thành công bản ghi %d/%d\n", sentCount, (int)array.size());
+
+    delay(500); // Tăng delay để tránh quá tải Firebase
+  }
+
+  // Cập nhật dữ liệu hiện tại với bản ghi cuối cùng
+  if (sentCount > 0) {
+    Serial.println("🔄 Cập nhật dữ liệu cảm biến hiện tại với bản ghi mới nhất...");
+    if (!Firebase.RTDB.updateNode(&fbdo, "sensors/current", &lastJson)) {
+      Serial.println("❌ Lỗi cập nhật dữ liệu hiện tại: " + fbdo.errorReason());
+    } else {
+      Serial.println("✅ Cập nhật dữ liệu hiện tại thành công");
+    }
+  }
+
+  if (allSent) {
+    // Xóa file nếu tất cả dữ liệu đã được gửi
+    SPIFFS.remove(SENSORS_FILE);
+    Serial.printf("✅ Đã gửi thành công tất cả %d bản ghi và xóa file SPIFFS\n", sentCount);
+  } else {
+    Serial.printf("⚠️ Chỉ gửi được %d/%d bản ghi, còn lại sẽ được gửi sau\n",
+                 sentCount, (int)array.size());
+
+    // Xóa các bản ghi đã gửi thành công
+    if (sentCount > 0) {
+      Serial.println("🔄 Đang lưu lại các bản ghi chưa gửi...");
+      DynamicJsonDocument newDoc(8192);
+      JsonArray newArray = newDoc.to<JsonArray>();
+
+      // Chỉ giữ lại các bản ghi chưa gửi
+      for (size_t i = sentCount; i < array.size(); i++) {
+        newArray.add(array[i]);
+      }
+
+      // Lưu lại vào file
+      File file = SPIFFS.open(SENSORS_FILE, FILE_WRITE);
+      if (file) {
+        serializeJson(newDoc, file);
+        file.close();
+        Serial.printf("✅ Đã lưu lại %d bản ghi chưa gửi vào SPIFFS\n", (int)(array.size() - sentCount));
+      } else {
+        Serial.println("❌ Lỗi mở file để lưu các bản ghi còn lại");
+      }
+    }
+  }
+
+  Serial.println("----- Kết thúc quá trình gửi dữ liệu -----\n");
+}
+
+// Kiểm tra dung lượng SPIFFS
+bool checkSPIFFSSpace() {
+  unsigned long totalBytes = SPIFFS.totalBytes();
+  unsigned long usedBytes = SPIFFS.usedBytes();
+  float usedPercentage = (float)usedBytes / totalBytes * 100;
+
+  Serial.printf("SPIFFS: %u bytes used of %u bytes (%.2f%%)\n",
+                usedBytes, totalBytes, usedPercentage);
+
+  // Nếu sử dụng hơn 90% dung lượng
+  return (usedPercentage <= 90);
+}
+
+// Xóa dữ liệu cảm biến cũ nhất
+void removeOldestSensorData() {
+  if (!SPIFFS.exists(SENSORS_FILE)) {
+    return;
+  }
+
+  File file = SPIFFS.open(SENSORS_FILE, FILE_READ);
+  if (!file) {
+    return;
+  }
+
+  DynamicJsonDocument doc(8192);
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+
+  if (error) {
+    return;
+  }
+
+  JsonArray array = doc.as<JsonArray>();
+  if (array.size() <= 1) {
+    return;
+  }
+
+  // Xóa 20% dữ liệu cũ nhất
+  size_t removeCount = max((size_t)1, array.size() / 5);
+  DynamicJsonDocument newDoc(8192);
+  JsonArray newArray = newDoc.to<JsonArray>();
+
+  // Chỉ giữ lại dữ liệu mới
+  for (size_t i = removeCount; i < array.size(); i++) {
+    newArray.add(array[i]);
+  }
+
+  // Lưu lại vào file
+  File newFile = SPIFFS.open(SENSORS_FILE, FILE_WRITE);
+  if (newFile) {
+    serializeJson(newDoc, newFile);
+    newFile.close();
+    Serial.printf("✅ Đã xóa %d bản ghi cũ nhất\n", removeCount);
   }
 }
 
 void checkFirebaseConnection() {
-  Serial.println("\n----- Kiểm tra kết nối Firebase -----");
+  Serial.println("\n----- Bắt đầu kiểm tra kết nối Firebase -----");
+  Serial.println("🔍 Đang kiểm tra trạng thái kết nối Firebase...");
+
+  // Kiểm tra trạng thái WiFi trước
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ WiFi chưa kết nối, không thể kiểm tra Firebase");
+    Serial.println("📶 Trạng thái WiFi: " + String(WiFi.status()));
+    Serial.println("🔄 Hãy đảm bảo ESP32 đã kết nối WiFi trước khi kiểm tra Firebase");
+    Serial.println("----- Kết thúc kiểm tra kết nối Firebase -----\n");
+    return;
+  }
+
+  Serial.println("✅ WiFi đã kết nối");
+  Serial.printf("📶 Địa chỉ IP: %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("📶 Cường độ tín hiệu: %d dBm\n", WiFi.RSSI());
 
   if (Firebase.ready()) {
     Serial.println("✅ Firebase đã sẵn sàng!");
+    Serial.println("🔑 Đã xác thực thành công với Firebase");
 
     // Kiểm tra kết nối bằng cách đọc một giá trị đơn giản
+    Serial.println("🔍 Đang kiểm tra kết nối bằng cách đọc dữ liệu từ '/test'...");
     if (Firebase.RTDB.getString(&fbdo, "/test")) {
-      Serial.println("✅ Kết nối Firebase thành công!");
-      Serial.println("Giá trị đọc được: " + fbdo.stringData());
+      Serial.println("✅ Kết nối Firebase hoạt động tốt!");
+      Serial.println("📄 Giá trị đọc được: " + fbdo.stringData());
     } else {
-      Serial.println("❌ Lỗi đọc dữ liệu từ Firebase: " + fbdo.errorReason());
+      Serial.println("⚠️ Lỗi đọc dữ liệu từ Firebase: " + fbdo.errorReason());
 
       // Thử ghi một giá trị đơn giản
-      if (Firebase.RTDB.setString(&fbdo, "/test", "ESP32 Connected")) {
-        Serial.println("✅ Ghi dữ liệu thành công!");
+      Serial.println("🔄 Đang thử ghi dữ liệu vào '/test'...");
+      if (Firebase.RTDB.setString(&fbdo, "/test", "ESP32 Connected at " + String(millis()))) {
+        Serial.println("✅ Ghi dữ liệu thành công! Kết nối Firebase hoạt động tốt");
       } else {
         Serial.println("❌ Lỗi ghi dữ liệu: " + fbdo.errorReason());
-        Serial.println("Mã lỗi: " + String(fbdo.errorCode()) + ", Thông báo: " + fbdo.errorReason());
+        Serial.printf("❌ Mã lỗi: %d, Thông báo: %s\n", fbdo.errorCode(), fbdo.errorReason().c_str());
 
         // Kiểm tra lỗi cụ thể
         if (fbdo.errorCode() == -127) {
-          Serial.println("Lỗi -127: Thiếu thông tin xác thực cần thiết");
-          Serial.println("Kiểm tra lại DATABASE_URL và API_KEY");
+          Serial.println("⚠️ Lỗi -127: Thiếu thông tin xác thực cần thiết");
+          Serial.println("🔍 Kiểm tra lại DATABASE_URL và API_KEY");
 
           // Thử sửa DATABASE_URL (thêm dấu / ở cuối nếu chưa có)
           if (!String(DATABASE_URL).endsWith("/")) {
-            Serial.println("Thử thêm dấu / vào cuối DATABASE_URL...");
+            Serial.println("🔄 Thử thêm dấu / vào cuối DATABASE_URL...");
             String newUrl = String(DATABASE_URL) + "/";
-            Serial.println("URL mới: " + newUrl);
+            Serial.println("🔗 URL mới: " + newUrl);
 
             // Cập nhật URL trong cấu hình
             config.database_url = newUrl.c_str();
 
             // Khởi tạo lại kết nối Firebase
-            Serial.println("Thử kết nối lại...");
+            Serial.println("🔄 Đang thử kết nối lại với URL mới...");
             Firebase.begin(&config, &auth);
           } else {
             // Thử kết nối lại
-            Serial.println("Thử kết nối lại...");
+            Serial.println("🔄 Đang thử kết nối lại...");
             Firebase.begin(&config, &auth);
           }
         } else if (fbdo.errorCode() == 400) {
-          Serial.println("Lỗi 400: Thông tin xác thực không hợp lệ");
-          Serial.println("Kiểm tra lại USER_EMAIL và USER_PASSWORD");
+          Serial.println("⚠️ Lỗi 400: Thông tin xác thực không hợp lệ");
+          Serial.println("🔍 Kiểm tra lại USER_EMAIL và USER_PASSWORD");
 
-          // In thông tin xác thực hiện tại
-          Serial.println("Email: " + String(USER_EMAIL));
-          Serial.println("Password: " + String(USER_PASSWORD));
+          // In thông tin xác thực hiện tại (che một phần mật khẩu)
+          String maskedPassword = String(USER_PASSWORD);
+          if (maskedPassword.length() > 4) {
+            maskedPassword = maskedPassword.substring(0, 2) + "****" +
+                            maskedPassword.substring(maskedPassword.length() - 2);
+          } else {
+            maskedPassword = "****";
+          }
+
+          Serial.println("📧 Email: " + String(USER_EMAIL));
+          Serial.println("🔑 Password: " + maskedPassword);
 
           // Thử kết nối lại
-          Serial.println("Thử kết nối lại...");
+          Serial.println("🔄 Đang thử kết nối lại...");
           Firebase.begin(&config, &auth);
         }
       }
     }
   } else {
     Serial.println("❌ Firebase chưa sẵn sàng!");
+    Serial.println("⚠️ Chưa xác thực thành công với Firebase");
 
-    // In thông tin cấu hình
-    Serial.println("API Key: " + String(API_KEY));
-    Serial.println("Database URL: " + String(DATABASE_URL));
-    Serial.println("Project ID: " + String(FIREBASE_PROJECT_ID));
-    Serial.println("Email: " + String(USER_EMAIL));
-    Serial.println("Password: " + String(USER_PASSWORD));
+    // In thông tin cấu hình (che một phần mật khẩu)
+    String maskedPassword = String(USER_PASSWORD);
+    if (maskedPassword.length() > 4) {
+      maskedPassword = maskedPassword.substring(0, 2) + "****" +
+                      maskedPassword.substring(maskedPassword.length() - 2);
+    } else {
+      maskedPassword = "****";
+    }
+
+    Serial.println("\n----- Thông tin cấu hình Firebase -----");
+    Serial.println("🔑 API Key: " + String(API_KEY));
+    Serial.println("🔗 Database URL: " + String(DATABASE_URL));
+    Serial.println("📋 Project ID: " + String(FIREBASE_PROJECT_ID));
+    Serial.println("📧 Email: " + String(USER_EMAIL));
+    Serial.println("🔑 Password: " + maskedPassword);
+    Serial.println("----- Kết thúc thông tin cấu hình -----\n");
 
     // Thử kết nối lại bằng cách khởi tạo lại Firebase
-    Serial.println("Đang thử khởi tạo lại kết nối Firebase...");
+    Serial.println("🔄 Đang thử khởi tạo lại kết nối Firebase...");
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
 
     // Kiểm tra lại sau khi khởi tạo lại
-    delay(1000);
+    Serial.println("⏳ Đợi 2 giây để khởi tạo kết nối...");
+    delay(2000);
     if (Firebase.ready()) {
       Serial.println("✅ Kết nối lại thành công!");
+
+      // Thử ghi dữ liệu để xác nhận kết nối
+      if (Firebase.RTDB.setString(&fbdo, "/test", "ESP32 Reconnected at " + String(millis()))) {
+        Serial.println("✅ Ghi dữ liệu thành công sau khi kết nối lại!");
+      }
     } else {
       Serial.println("❌ Kết nối lại thất bại!");
+      Serial.println("⚠️ Sẽ thử lại trong lần kiểm tra tiếp theo");
     }
   }
 
-  Serial.println("----- Kết thúc kiểm tra -----\n");
+  Serial.println("----- Kết thúc kiểm tra kết nối Firebase -----\n");
 }
