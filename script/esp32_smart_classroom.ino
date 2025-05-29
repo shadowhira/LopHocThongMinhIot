@@ -39,6 +39,9 @@
 const char* ssid = "Xuantruong";
 const char* password = "1234567890";
 
+// Google Apps Script Web App URL (thay thế bằng URL thực tế sau khi deploy)
+const char* GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyj_hMUvuswBBZfenYf_9shRFoEThyyoQrMb03gmD97Z1BSS7-xR8fCl5GoFHnPDjwd/exec";
+
 // Cấu hình NTP
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 25200;      // GMT+7 (7 giờ * 3600 giây)
@@ -125,6 +128,11 @@ void sendPendingSensorData();
 bool checkSPIFFSSpace();
 void removeOldestSensorData();
 void checkFirebaseConnection();
+bool sendToGoogleSheets(String dataType, String data);
+void notifyGoogleSheets();
+void buzzerSuccess();
+void buzzerFailed();
+void buzzerBeep(int times, int duration, int pause);
 
 // Thời gian
 unsigned long lastSensorUpdate = 0;
@@ -254,6 +262,11 @@ void setup() {
   initAutoMode();
 
   Serial.println("Hệ thống đã sẵn sàng!");
+
+  // Test buzzer khi khởi động
+  Serial.println("🔊 Test buzzer khi khởi động...");
+  buzzerBeep(1, 500, 0); // 1 tiếng kêu dài 500ms để test
+  delay(500);
 
   // Đồng bộ thời gian NTP
   Serial.println("Đang đồng bộ thời gian NTP khi khởi động...");
@@ -408,6 +421,9 @@ void loop() {
     displayCheckInSuccess();
     Serial.println("✅ Điểm danh thành công");
 
+    // Kêu buzzer 2 lần cho điểm danh thành công
+    buzzerSuccess();
+
     // Sau khi hiển thị thông báo, mở cửa nếu chế độ tự động được bật
     if (doorAutoMode && studentExists) {
       Serial.println("🚪 Mở cửa tự động khi quẹt thẻ đã đăng ký");
@@ -416,6 +432,10 @@ void loop() {
     }
   } else {
     displayCheckInFailed();
+
+    // Kêu buzzer 3 lần cho điểm danh thất bại
+    buzzerFailed();
+
     if (!studentExists) {
       Serial.println("❌ Thẻ không được đăng ký trong hệ thống");
     } else {
@@ -775,6 +795,9 @@ void updateSensors() {
 
     if (Firebase.RTDB.updateNode(&fbdo, "sensors/current", &json)) {
       Serial.println("✅ Cập nhật dữ liệu cảm biến thành công");
+
+      // Thông báo Google Apps Script để đồng bộ dữ liệu cảm biến
+      notifyGoogleSheets();
     } else {
       Serial.println("❌ Lỗi cập nhật dữ liệu cảm biến: " + fbdo.errorReason());
       // Lưu vào SPIFFS khi không thể gửi lên Firebase
@@ -1176,6 +1199,9 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
       if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &json)) {
         Serial.println("✅ Cập nhật điểm danh thành công");
         attendanceSuccess = true;
+
+        // Thông báo Google Apps Script để đồng bộ dữ liệu điểm danh
+        notifyGoogleSheets();
       } else {
         Serial.println("❌ Lỗi cập nhật điểm danh: " + fbdo.errorReason());
         attendanceSuccess = false;
@@ -1202,13 +1228,16 @@ void displayCheckInSuccess() {
   display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(SH110X_WHITE);
-  display.setCursor(0, 20);
+  display.setCursor(0, 15);
   display.println("✅ Thanh cong");
 
-  // Hiển thị thông tin về chế độ tự động cửa
+  // Hiển thị thông tin về buzzer và chế độ tự động
   display.setTextSize(1);
+  display.setCursor(0, 35);
+  display.println("🔊 Buzzer: 2 tieng keu");
+
   if (doorAutoMode) {
-    display.setCursor(0, 45);
+    display.setCursor(0, 50);
     display.println("Che do tu dong: BAT");
   }
 
@@ -1222,11 +1251,14 @@ void displayCheckInFailed() {
   display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(SH110X_WHITE);
-  display.setCursor(0, 20);
+  display.setCursor(0, 10);
   display.println("❌ That bai");
 
-  // Kiểm tra xem thẻ có tồn tại không
+  // Hiển thị thông tin về buzzer và lỗi
   display.setTextSize(1);
+  display.setCursor(0, 30);
+  display.println("🔊 Buzzer: 3 tieng keu");
+
   display.setCursor(0, 45);
   display.println("The khong duoc dang ky");
 
@@ -1815,4 +1847,107 @@ void checkFirebaseConnection() {
   }
 
   Serial.println("----- Kết thúc kiểm tra kết nối Firebase -----\n");
+}
+
+// Hàm gửi dữ liệu lên Google Sheets thông qua Google Apps Script
+bool sendToGoogleSheets(String dataType, String data) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ Không có kết nối WiFi để gửi Google Sheets");
+    return false;
+  }
+
+  Serial.println("\n----- Bắt đầu gửi dữ liệu lên Google Sheets -----");
+  Serial.println("📊 Loại dữ liệu: " + dataType);
+  Serial.println("📄 Dữ liệu: " + data);
+
+  HTTPClient http;
+  http.begin(GOOGLE_SCRIPT_URL);
+  http.addHeader("Content-Type", "application/json");
+
+  // Tạo JSON payload
+  String payload = "{\"type\":\"" + dataType + "\",\"data\":" + data + ",\"timestamp\":" + String(getCurrentTimestamp()) + "}";
+  Serial.println("📤 Payload: " + payload);
+
+  int httpResponseCode = http.POST(payload);
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println("✅ Phản hồi từ Google Apps Script:");
+    Serial.println("📋 Mã phản hồi: " + String(httpResponseCode));
+    Serial.println("📄 Nội dung: " + response);
+
+    http.end();
+    Serial.println("----- Kết thúc gửi dữ liệu lên Google Sheets -----\n");
+    return httpResponseCode == 200;
+  } else {
+    Serial.println("❌ Lỗi gửi dữ liệu lên Google Sheets:");
+    Serial.println("📋 Mã lỗi: " + String(httpResponseCode));
+    Serial.println("📄 Lỗi: " + http.errorToString(httpResponseCode));
+
+    http.end();
+    Serial.println("----- Kết thúc gửi dữ liệu lên Google Sheets -----\n");
+    return false;
+  }
+}
+
+// Hàm thông báo Google Apps Script để đồng bộ dữ liệu
+void notifyGoogleSheets() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ Không có kết nối WiFi để thông báo Google Sheets");
+    return;
+  }
+
+  Serial.println("\n🔔 Thông báo Google Apps Script để đồng bộ dữ liệu...");
+
+  HTTPClient http;
+  http.begin(GOOGLE_SCRIPT_URL);
+  http.addHeader("Content-Type", "application/json");
+
+  // Gửi thông báo đơn giản để trigger đồng bộ
+  String payload = "{\"action\":\"sync\",\"timestamp\":" + String(getCurrentTimestamp()) + "}";
+
+  int httpResponseCode = http.POST(payload);
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println("✅ Đã thông báo Google Apps Script thành công");
+    Serial.println("📋 Mã phản hồi: " + String(httpResponseCode));
+  } else {
+    Serial.println("❌ Lỗi thông báo Google Apps Script:");
+    Serial.println("📋 Mã lỗi: " + String(httpResponseCode));
+  }
+
+  http.end();
+}
+
+// Hàm buzzer cho điểm danh thành công (kêu 2 lần)
+void buzzerSuccess() {
+  Serial.println("🔊 Buzzer: Điểm danh thành công (2 tiếng kêu)");
+  buzzerBeep(2, 200, 150); // 2 lần, mỗi lần 200ms, nghỉ 150ms
+}
+
+// Hàm buzzer cho điểm danh thất bại (kêu 3 lần)
+void buzzerFailed() {
+  Serial.println("🔊 Buzzer: Điểm danh thất bại (3 tiếng kêu)");
+  buzzerBeep(3, 300, 200); // 3 lần, mỗi lần 300ms, nghỉ 200ms
+}
+
+// Hàm buzzer tổng quát
+void buzzerBeep(int times, int duration, int pause) {
+  for (int i = 0; i < times; i++) {
+    // Bật buzzer
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(duration);
+
+    // Tắt buzzer
+    digitalWrite(BUZZER_PIN, LOW);
+
+    // Nghỉ giữa các tiếng kêu (trừ lần cuối)
+    if (i < times - 1) {
+      delay(pause);
+    }
+  }
+
+  // Đảm bảo buzzer tắt hoàn toàn
+  digitalWrite(BUZZER_PIN, LOW);
 }

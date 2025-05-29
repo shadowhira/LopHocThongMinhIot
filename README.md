@@ -44,6 +44,13 @@ Dự án "Lớp học thông minh" là một hệ thống tích hợp phần c�
 - Mô phỏng điều khiển thiết bị (đèn, cửa)
 - Tạo cảnh báo để kiểm tra thông báo
 
+### 4. 🆕 Tích hợp Google Sheets
+
+- Đồng bộ dữ liệu tự động từ Firebase lên Google Sheets
+- Cập nhật theo thời gian thực khi có dữ liệu mới
+- Hỗ trợ đồng bộ danh sách sinh viên, điểm danh và dữ liệu cảm biến
+- Sử dụng Google Apps Script làm cầu nối
+
 ## Hướng dẫn cài đặt và chạy
 
 ### Phần cứng (ESP32)
@@ -86,6 +93,13 @@ Dự án "Lớp học thông minh" là một hệ thống tích hợp phần c�
    - Điều khiển thiết bị: `node simulate-device-control.js light on`
    - Tạo cảnh báo: `node create-alert.js temperature "Nhiệt độ quá cao: 35°C"`
 
+### 🆕 Test tính năng Google Sheets
+
+1. Thiết lập Google Apps Script theo [hướng dẫn](docs/huong-dan-google-sheets.md)
+2. Cập nhật `GOOGLE_SCRIPT_URL` trong file ESP32
+3. Chạy test: `node test/test-google-sheets.js`
+4. Kiểm tra dữ liệu trong Google Sheets
+
 ## Tài liệu
 
 Xem thêm các tài liệu chi tiết trong thư mục `docs/`:
@@ -99,6 +113,7 @@ Xem thêm các tài liệu chi tiết trong thư mục `docs/`:
   - [Phần 1: Cấu trúc thư mục và các file chính](docs/huong-dan-doc-source-app-mobile.md)
   - [Phần 2: Các màn hình chính và hooks](docs/huong-dan-doc-source-app-mobile-phan2.md)
   - [Phần 3: Phân tích chi tiết luồng hoạt động](docs/huong-dan-doc-source-app-mobile-phan3.md)
+- [🆕 Hướng dẫn triển khai Google Sheets](docs/huong-dan-google-sheets.md)
 
 ## Đóng gói ứng dụng
 
