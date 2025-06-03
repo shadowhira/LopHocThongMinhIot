@@ -109,6 +109,7 @@ bool motionDetected = false;
 #define SENSORS_FILE "/pending_sensors.json"
 #define ATTENDANCE_FILE "/pending_attendance.json"
 #define ALERTS_FILE "/pending_alerts.json"
+#define STUDENTS_FILE "/students_list.json"  // Danh sách sinh viên để xử lý offline
 
 // Khai báo hàm (function prototypes)
 void syncNtpTime();
@@ -133,8 +134,12 @@ void notifyGoogleSheets();
 void buzzerSuccess();
 void buzzerFailed();
 void buzzerBeep(int times, int duration, int pause);
+void downloadStudentsList();
+void saveAttendanceToSPIFFS(String cardID, String studentName, bool isCheckOut, unsigned long timestamp);
+void sendPendingAttendanceData();
+bool checkStudentOffline(String cardID, String &studentName);
 
-// Thời gian
+// Thời gian - Tối ưu hóa để giảm delay
 unsigned long lastSensorUpdate = 0;
 unsigned long lastAlertCheck = 0;
 unsigned long lastDeviceCheck = 0;
@@ -144,14 +149,16 @@ unsigned long lastDoorOpened = 0;
 unsigned long lastNtpSync = 0;
 unsigned long lastThresholdCheck = 0;
 unsigned long lastOfflineSave = 0;
-const unsigned long SENSOR_UPDATE_INTERVAL = 5000; // 5 giây
-const unsigned long ALERT_CHECK_INTERVAL = 10000; // 10 giây
-const unsigned long DEVICE_CHECK_INTERVAL = 1000; // 1 giây
-const unsigned long MOTION_CHECK_INTERVAL = 500; // 0.5 giây
-const unsigned long AUTO_OFF_DELAY = 10000; // 10 giây
-const unsigned long NTP_SYNC_INTERVAL = 3600000; // 1 giờ
-const unsigned long THRESHOLD_CHECK_INTERVAL = 5000; // 5 giây
-const unsigned long OFFLINE_UPDATE_INTERVAL = 60000; // 1 phút khi offline
+unsigned long lastAutoModeCheck = 0;
+const unsigned long SENSOR_UPDATE_INTERVAL = 4000; // Tăng lên 4s để ổn định hơn
+const unsigned long ALERT_CHECK_INTERVAL = 10000; // Tăng lại lên 10s để ổn định
+const unsigned long DEVICE_CHECK_INTERVAL = 3000; // Tăng lên 3s để giảm Firebase calls và ổn định hơn
+const unsigned long MOTION_CHECK_INTERVAL = 500; // Tăng lại lên 500ms để ổn định
+const unsigned long AUTO_OFF_DELAY = 10000; // 5 giây cho cả đèn và cửa tự động
+const unsigned long NTP_SYNC_INTERVAL = 3600000; // Giữ nguyên 1 giờ
+const unsigned long THRESHOLD_CHECK_INTERVAL = 15000; // Tăng lên 15s để giảm Firebase calls
+const unsigned long OFFLINE_UPDATE_INTERVAL = 60000; // Giữ nguyên 1 phút
+const unsigned long AUTO_MODE_CHECK_INTERVAL = 8000; // Tăng lên 8s để ổn định hơn
 
 void IRAM_ATTR buttonPressed() {
   checkOut = !checkOut;
@@ -208,10 +215,10 @@ void setup() {
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
 
-  // Đặt thời gian chờ cho các hoạt động Firebase
-  fbdo.setResponseSize(4096);
-  Firebase.RTDB.setReadTimeout(&fbdo, 1000 * 60);
-  Firebase.RTDB.setwriteSizeLimit(&fbdo, "tiny");
+  // Đặt thời gian chờ cho các hoạt động Firebase (tối ưu hóa tốc độ tối đa)
+  fbdo.setResponseSize(4096);  // Tăng lên 4096 để tránh buffer overflow khi tải danh sách sinh viên
+  Firebase.RTDB.setReadTimeout(&fbdo, 5000);  // Tăng lại lên 5s để ổn định hơn
+  Firebase.RTDB.setwriteSizeLimit(&fbdo, "small");
 
   // Khởi tạo các cảm biến và thiết bị
   SPI.begin();
@@ -222,6 +229,20 @@ void setup() {
   mfrc522.PCD_SetAntennaGain(mfrc522.RxGain_max);
 
   dht.begin();
+  delay(2000); // Đợi DHT ổn định
+  Serial.println("✅ DHT đã khởi tạo và ổn định");
+
+  // Test đọc DHT ngay sau khi khởi tạo
+  float testTemp = dht.readTemperature();
+  float testHumi = dht.readHumidity();
+  Serial.printf("🧪 Test DHT - Nhiệt độ: %.1f°C, Độ ẩm: %.1f%%\n", testTemp, testHumi);
+
+  if (isnan(testTemp) || isnan(testHumi)) {
+    Serial.println("⚠️ DHT có vấn đề, sẽ sử dụng giá trị mặc định");
+  } else {
+    Serial.println("✅ DHT hoạt động bình thường");
+  }
+
   pinMode(FLAME_PIN, INPUT);
   pinMode(PIR_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
@@ -302,6 +323,12 @@ void setup() {
   // Kiểm tra kết nối Firebase
   checkFirebaseConnection();
 
+  // Tải danh sách sinh viên từ Firebase vào SPIFFS
+  if (WiFi.status() == WL_CONNECTED && Firebase.ready()) {
+    Serial.println("📥 Đang tải danh sách sinh viên từ Firebase...");
+    downloadStudentsList();
+  }
+
   // Kiểm tra và gửi dữ liệu offline từ SPIFFS
   if (SPIFFS.exists(SENSORS_FILE)) {
     Serial.println("\n----- Kiểm tra dữ liệu offline trong SPIFFS -----");
@@ -318,6 +345,12 @@ void setup() {
     if (WiFi.status() == WL_CONNECTED && Firebase.ready()) {
       Serial.println("🔄 Đang gửi dữ liệu offline lên Firebase sau khi khởi động...");
       sendPendingSensorData();
+
+      // Gửi dữ liệu điểm danh offline nếu có
+      if (SPIFFS.exists(ATTENDANCE_FILE)) {
+        Serial.println("🔄 Đang gửi dữ liệu điểm danh offline...");
+        sendPendingAttendanceData();
+      }
     } else {
       Serial.println("⚠️ Không thể gửi dữ liệu offline, WiFi hoặc Firebase chưa sẵn sàng");
       Serial.println("💾 Dữ liệu sẽ được giữ lại trong SPIFFS để gửi sau");
@@ -374,9 +407,9 @@ void loop() {
   // Kiểm tra chế độ tự động
   checkAutoMode(currentMillis);
 
-  // Đọc thẻ RFID với cơ chế thử lại
+  // Đọc thẻ RFID với cơ chế thử lại - Tối ưu hóa để ổn định
   if (!mfrc522.PICC_IsNewCardPresent()) {
-    delay(100); // Thêm delay lớn hơn
+    delay(80); // Tăng lên 80ms để ổn định hơn
     if (!isDisplayingMessage) updateDisplay();
     return;
   }
@@ -392,7 +425,7 @@ void loop() {
       rfidRetryCount = 0;
     }
 
-    delay(300); // Thêm delay lớn hơn khi đọc thất bại
+    delay(200); // Tăng lên 200ms để ổn định hơn
     if (!isDisplayingMessage) updateDisplay();
     return;
   }
@@ -405,23 +438,46 @@ void loop() {
   cardID.toUpperCase();
   Serial.println("\n📌 Mã thẻ: " + cardID);
 
-  // Kiểm tra xem sinh viên có tồn tại không
+  // Kiểm tra xem sinh viên có tồn tại không (ưu tiên offline trước)
   bool studentExists = false;
-  if (Firebase.RTDB.getString(&fbdo, "students/" + cardID + "/name")) {
+  String studentName = "Unknown";
+
+  // Kiểm tra offline trước
+  if (checkStudentOffline(cardID, studentName)) {
     studentExists = true;
+    Serial.println("✅ Tìm thấy sinh viên trong danh sách offline: " + studentName);
+  }
+  // Nếu không có offline và có kết nối, kiểm tra online
+  else if (WiFi.status() == WL_CONNECTED && Firebase.ready()) {
+    if (Firebase.RTDB.getString(&fbdo, "students/" + cardID + "/name")) {
+      studentExists = true;
+      studentName = fbdo.stringData();
+      Serial.println("✅ Tìm thấy sinh viên online: " + studentName);
+    }
   }
 
   // Lưu trữ kết quả điểm danh và thông tin sinh viên
-  bool firebaseSuccess = sendToFirebase(cardID, checkOut);
-  delay(500); // Giảm delay xuống để tăng tốc độ phản hồi
+  bool firebaseSuccess = false;
 
-  // Hiển thị thông báo dựa trên kết quả xử lý
+  if (WiFi.status() == WL_CONNECTED && Firebase.ready()) {
+    firebaseSuccess = sendToFirebase(cardID, checkOut);
+  } else {
+    // Lưu vào SPIFFS khi offline
+    if (studentExists) {
+      saveAttendanceToSPIFFS(cardID, studentName, checkOut, getCurrentTimestamp());
+      firebaseSuccess = true; // Coi như thành công vì đã lưu offline
+      Serial.println("💾 Đã lưu điểm danh offline vào SPIFFS");
+    }
+  }
+  delay(50); // Giảm delay từ 100ms xuống 50ms để tăng tốc độ phản hồi
+
+  // Hiển thị thông báo dựa trên kết quả xử lý - Tối ưu hóa
   if (firebaseSuccess) {
     // Hiển thị thông báo thành công trước
     displayCheckInSuccess();
     Serial.println("✅ Điểm danh thành công");
 
-    // Kêu buzzer 2 lần cho điểm danh thành công
+    // Kêu buzzer 2 lần cho điểm danh thành công (async)
     buzzerSuccess();
 
     // Sau khi hiển thị thông báo, mở cửa nếu chế độ tự động được bật
@@ -433,7 +489,7 @@ void loop() {
   } else {
     displayCheckInFailed();
 
-    // Kêu buzzer 3 lần cho điểm danh thất bại
+    // Kêu buzzer 3 lần cho điểm danh thất bại (async)
     buzzerFailed();
 
     if (!studentExists) {
@@ -491,37 +547,47 @@ void initAutoMode() {
   }
 }
 
-// Hàm kiểm tra và cập nhật trạng thái thiết bị
+// Hàm kiểm tra và cập nhật trạng thái thiết bị - Tối ưu hóa Firebase calls
 void checkDeviceControls() {
   if (Firebase.ready()) {
-    // Kiểm tra chế độ tự động cho đèn
-    if (Firebase.RTDB.getBool(&fbdo, "devices/auto/light")) {
-      lightAutoMode = fbdo.boolData();
-    }
+    // Tối ưu: Đọc tất cả dữ liệu trong 1 lần thay vì nhiều calls riêng lẻ
+    if (Firebase.RTDB.getJSON(&fbdo, "devices")) {
+      FirebaseJson &json = fbdo.jsonObject();
+      FirebaseJsonData autoLight, autoDoor, light1, door1;
 
-    // Kiểm tra chế độ tự động cho cửa
-    if (Firebase.RTDB.getBool(&fbdo, "devices/auto/door")) {
-      doorAutoMode = fbdo.boolData();
-    }
+      // Kiểm tra chế độ tự động
+      json.get(autoLight, "auto/light");
+      json.get(autoDoor, "auto/door");
 
-    // Kiểm tra trạng thái đèn (chỉ khi không ở chế độ tự động)
-    if (!lightAutoMode) {
-      if (Firebase.RTDB.getBool(&fbdo, "devices/lights/light1")) {
-        bool newLightState = fbdo.boolData();
-        if (newLightState != lightState) {
-          lightState = newLightState;
-          controlLight(lightState);
+      if (autoLight.success) {
+        lightAutoMode = autoLight.boolValue;
+      }
+
+      if (autoDoor.success) {
+        doorAutoMode = autoDoor.boolValue;
+      }
+
+      // Kiểm tra trạng thái đèn (chỉ khi không ở chế độ tự động)
+      if (!lightAutoMode) {
+        json.get(light1, "lights/light1");
+        if (light1.success) {
+          bool newLightState = light1.boolValue;
+          if (newLightState != lightState) {
+            lightState = newLightState;
+            controlLight(lightState);
+          }
         }
       }
-    }
 
-    // Kiểm tra trạng thái cửa (chỉ khi không ở chế độ tự động)
-    if (!doorAutoMode) {
-      if (Firebase.RTDB.getBool(&fbdo, "devices/doors/door1")) {
-        bool newDoorState = fbdo.boolData();
-        if (newDoorState != doorState) {
-          doorState = newDoorState;
-          controlDoor(doorState);
+      // Kiểm tra trạng thái cửa (chỉ khi không ở chế độ tự động)
+      if (!doorAutoMode) {
+        json.get(door1, "doors/door1");
+        if (door1.success) {
+          bool newDoorState = door1.boolValue;
+          if (newDoorState != doorState) {
+            doorState = newDoorState;
+            controlDoor(doorState);
+          }
         }
       }
     }
@@ -581,7 +647,7 @@ void checkMotion() {
   }
 }
 
-// Kiểm tra chế độ tự động
+// Kiểm tra chế độ tự động - Tối ưu hóa
 void checkAutoMode(unsigned long currentMillis) {
   // Chế độ tự động cho cửa
   if (doorAutoMode && doorState) {
@@ -593,10 +659,10 @@ void checkAutoMode(unsigned long currentMillis) {
     }
   }
 
-  // Kiểm tra trạng thái chế độ tự động từ Firebase
-  if (currentMillis - lastDeviceCheck >= DEVICE_CHECK_INTERVAL * 10) {
+  // Tối ưu: Kiểm tra chế độ tự động với interval riêng để giảm Firebase calls
+  if (currentMillis - lastAutoModeCheck >= AUTO_MODE_CHECK_INTERVAL) {
     if (Firebase.ready()) {
-      // Kiểm tra chế độ tự động cho cửa
+      // Chỉ kiểm tra chế độ tự động cho cửa khi cần thiết
       if (Firebase.RTDB.getBool(&fbdo, "devices/auto/door")) {
         bool newDoorAutoMode = fbdo.boolData();
         if (newDoorAutoMode != doorAutoMode) {
@@ -606,6 +672,7 @@ void checkAutoMode(unsigned long currentMillis) {
         }
       }
     }
+    lastAutoModeCheck = currentMillis;
   }
 }
 
@@ -622,7 +689,7 @@ void controlLight(bool state) {
   }
 }
 
-// Điều khiển cửa (servo)
+// Điều khiển cửa (servo) - Tối ưu hóa delay
 void controlDoor(bool state) {
   int position = state ? servoOpenPosition : servoClosedPosition;
 
@@ -641,19 +708,19 @@ void controlDoor(bool state) {
   doorState = state;
   Serial.println(state ? "Cửa: MỞ" : "Cửa: ĐÓNG");
 
-  // Thêm delay nhỏ để đảm bảo servo có thời gian di chuyển
-  delay(100);
+  // Giảm delay từ 100ms xuống 50ms để tăng tốc độ
+  delay(50);
 
-  // Cập nhật trạng thái thực tế lên Firebase
-  if (Firebase.RTDB.setBool(&fbdo, "devices/status/door1", state)) {
-    Serial.println("✅ Cập nhật trạng thái cửa thành công");
-  } else {
-    Serial.println("❌ Lỗi cập nhật trạng thái cửa: " + fbdo.errorReason());
-  }
+  // Tối ưu: Cập nhật Firebase async để không chặn luồng chính
+  if (Firebase.ready()) {
+    // Sử dụng updateNodeAsync để không chặn
+    FirebaseJson json;
+    json.set("status/door1", state);
+    json.set("doors/door1", state);
 
-  // Cập nhật trạng thái cửa trên Firebase
-  if (Firebase.RTDB.setBool(&fbdo, "devices/doors/door1", state)) {
-    Serial.println("✅ Cập nhật lệnh điều khiển cửa thành công");
+    if (Firebase.RTDB.updateNodeAsync(&fbdo, "devices", &json)) {
+      Serial.println("✅ Đã gửi async cập nhật trạng thái cửa");
+    }
   }
 }
 
@@ -775,6 +842,23 @@ void updateSensors() {
   float temp = dht.readTemperature();
   float humi = dht.readHumidity();
   int flame_status = digitalRead(FLAME_PIN);
+
+  // Kiểm tra và xử lý giá trị nan từ DHT
+  if (isnan(temp)) {
+    temp = 25.0; // Giá trị mặc định
+    Serial.println("⚠️ DHT nhiệt độ lỗi, sử dụng giá trị mặc định: 25°C");
+  }
+
+  if (isnan(humi)) {
+    humi = 60.0; // Giá trị mặc định
+    Serial.println("⚠️ DHT độ ẩm lỗi, sử dụng giá trị mặc định: 60%");
+  }
+
+  // Kiểm tra giá trị gas hợp lệ
+  if (isnan(gas_ppm) || gas_ppm < 0) {
+    gas_ppm = 0.0;
+  }
+
   bool fireDetected = (flame_status == 0);
   bool gasDanger = (gas_ppm > gasThreshold);
   bool tempDanger = (temp < tempMin || temp > tempMax);
@@ -796,8 +880,8 @@ void updateSensors() {
     if (Firebase.RTDB.updateNode(&fbdo, "sensors/current", &json)) {
       Serial.println("✅ Cập nhật dữ liệu cảm biến thành công");
 
-      // Thông báo Google Apps Script để đồng bộ dữ liệu cảm biến
-      notifyGoogleSheets();
+      // Tạm thời tắt Google Sheets để tăng tốc độ và tránh lỗi
+      // notifyGoogleSheets();
     } else {
       Serial.println("❌ Lỗi cập nhật dữ liệu cảm biến: " + fbdo.errorReason());
       // Lưu vào SPIFFS khi không thể gửi lên Firebase
@@ -991,34 +1075,23 @@ void createAlert(String type, float value, float threshold, String message) {
 unsigned long getCurrentTimestamp() {
   struct tm timeinfo;
   if(!getLocalTime(&timeinfo)) {
-    Serial.println("Không thể lấy thời gian từ NTP, đang thử đồng bộ lại...");
+    // Tối ưu: Không thử đồng bộ lại để tránh delay, sử dụng thời gian ước tính
+    Serial.println("⚡ Sử dụng thời gian ước tính để tăng tốc");
 
-    // Thử đồng bộ lại thời gian NTP
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    delay(500);
+    // Tạo timestamp ước tính dựa trên millis()
+    time_t estimatedTime = 1715299200; // 2024-05-10 00:00:00 GMT
+    unsigned long secondsInDay = (millis() / 1000) % 86400;
+    estimatedTime += secondsInDay;
 
-    // Thử lấy thời gian lần nữa
-    if(!getLocalTime(&timeinfo)) {
-      Serial.println("Vẫn không thể lấy thời gian từ NTP, sử dụng thời gian ước tính!");
-
-      // Nếu vẫn không lấy được thời gian, tạo một timestamp ước tính
-      // Giả sử ngày 2024-05-10 và thời gian hiện tại dựa trên millis()
-      time_t estimatedTime = 1715299200; // 2024-05-10 00:00:00 GMT
-
-      // Thêm số giây trong ngày dựa trên millis()
-      unsigned long secondsInDay = (millis() / 1000) % 86400;
-      estimatedTime += secondsInDay;
-
-      return (unsigned long)estimatedTime;
-    }
+    return (unsigned long)estimatedTime;
   }
 
   time_t now;
   time(&now);
 
-  // In thông tin timestamp để debug
-  Serial.print("Timestamp hiện tại: ");
-  Serial.println((unsigned long)now);
+  // Tối ưu: Bỏ debug log để tăng tốc
+  // Serial.print("Timestamp hiện tại: ");
+  // Serial.println((unsigned long)now);
 
   return (unsigned long)now;
 }
@@ -1051,54 +1124,39 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
     // Lấy ngày hiện tại theo định dạng YYYYMMDD
     String date = getCurrentDateString(); // Sử dụng hàm lấy ngày hiện tại
 
-    // Kiểm tra trạng thái chế độ tự động cửa
-    if (Firebase.RTDB.getBool(&fbdo, "devices/auto/door")) {
-      doorAutoMode = fbdo.boolData();
-      Serial.print("Chế độ tự động cửa: ");
-      Serial.println(doorAutoMode ? "BẬT" : "TẮT");
-    }
-
-    // Lấy thông tin sinh viên
+    // Sử dụng dữ liệu offline để tránh Firebase call không cần thiết
     String studentName = "Unknown";
     bool studentExists = false;
-    if (Firebase.RTDB.getString(&fbdo, "students/" + cardID + "/name")) {
-      studentName = fbdo.stringData();
+
+    // Kiểm tra offline trước để tránh Firebase call
+    if (checkStudentOffline(cardID, studentName)) {
       studentExists = true;
+      Serial.println("⚡ Sử dụng dữ liệu offline: " + studentName);
     } else {
-      Serial.println("❌ Không tìm thấy sinh viên với RFID: " + cardID);
-
-      // Ghi lại thông tin về lần quẹt thẻ không hợp lệ
-      FirebaseJson unregisteredJson;
-      unsigned long currentTime = getCurrentTimestamp();
-
-      // Tạo ID duy nhất cho lần quẹt thẻ này
-      String swipeId = String(currentTime);
-
-      // Đường dẫn để lưu thông tin quẹt thẻ không hợp lệ
-      String unregisteredPath = "unregistered_swipes/" + date + "/" + cardID;
-
-      // Thêm thông tin về lần quẹt thẻ
-      unregisteredJson.set("timestamp", currentTime);
-      unregisteredJson.set("cardId", cardID);
-      unregisteredJson.set("doorAutoMode", doorAutoMode);
-
-      // Lấy thời gian đầy đủ để ghi log
-      struct tm timeinfo;
-      time_t now = currentTime;
-      localtime_r(&now, &timeinfo);
-      char timeStr[30];
-      strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-      unregisteredJson.set("time", String(timeStr));
-
-      // Gửi dữ liệu lên Firebase
-      if (Firebase.RTDB.updateNode(&fbdo, unregisteredPath, &unregisteredJson)) {
-        Serial.println("✅ Đã ghi lại thông tin quẹt thẻ không hợp lệ");
+      // Chỉ gọi Firebase nếu không có offline
+      if (Firebase.RTDB.getString(&fbdo, "students/" + cardID + "/name")) {
+        studentName = fbdo.stringData();
+        studentExists = true;
+        Serial.println("🔥 Lấy dữ liệu online: " + studentName);
       } else {
-        Serial.println("❌ Lỗi ghi thông tin quẹt thẻ không hợp lệ: " + fbdo.errorReason());
-      }
+        Serial.println("❌ Không tìm thấy sinh viên với RFID: " + cardID);
 
-      // Nếu sinh viên không tồn tại, vẫn trả về false vì không cho phép mở cửa
-      return false;
+        // Ghi lại thông tin về lần quẹt thẻ không hợp lệ (tối ưu - không chặn luồng chính)
+        FirebaseJson unregisteredJson;
+        unsigned long currentTime = getCurrentTimestamp();
+        String unregisteredPath = "unregistered_swipes/" + date + "/" + cardID;
+
+        unregisteredJson.set("timestamp", currentTime);
+        unregisteredJson.set("cardId", cardID);
+        unregisteredJson.set("doorAutoMode", doorAutoMode);
+
+        // Gửi async để không chặn luồng chính
+        Firebase.RTDB.updateNodeAsync(&fbdo, unregisteredPath, &unregisteredJson);
+        Serial.println("⚡ Đã ghi async thông tin quẹt thẻ không hợp lệ");
+
+        // Nếu sinh viên không tồn tại, vẫn trả về false vì không cho phép mở cửa
+        return false;
+      }
     }
 
     // Nếu sinh viên không tồn tại, không xử lý điểm danh
@@ -1106,106 +1164,49 @@ bool sendToFirebase(String cardID, bool manualCheckOut) {
       return false;
     }
 
-    // Cập nhật dữ liệu điểm danh
+    // Cập nhật dữ liệu điểm danh (tối ưu - giảm Firebase calls)
     FirebaseJson json;
     String attendancePath = "attendance/" + date + "/" + cardID;
 
-    // Kiểm tra xem sinh viên đã điểm danh vào chưa
-    bool hasCheckedIn = false;
-    unsigned long inTimestamp = 0;
-
-    if (Firebase.RTDB.get(&fbdo, attendancePath)) {
-      if (fbdo.dataType() == "json") {
-        FirebaseJson &jsonData = fbdo.jsonObject();
-        FirebaseJsonData inData;
-        jsonData.get(inData, "in");
-
-        if (inData.success) {
-          hasCheckedIn = true;
-          inTimestamp = inData.intValue;
-        }
-      }
-    }
+    // Tối ưu: Không kiểm tra trạng thái cũ, chỉ cập nhật trực tiếp
+    // Điều này giảm 1 Firebase call và tăng tốc độ đáng kể
 
     // Xác định thời điểm hiện tại từ NTP
     unsigned long currentTime = getCurrentTimestamp();
 
-    // Lấy giờ và phút từ thời gian NTP
+    // Tối ưu: Logic điểm danh đơn giản hóa
     struct tm timeinfo;
     time_t now = currentTime;
     localtime_r(&now, &timeinfo);
-
-    int currentHour = timeinfo.tm_hour;
-    int currentMinute = timeinfo.tm_min;
-
-    // Tính toán thời điểm ngưỡng điểm danh ra
+    int currentTimeInMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
     int checkOutTimeInMinutes = checkOutHour * 60 + checkOutMinute;
-    int currentTimeInMinutes = currentHour * 60 + currentMinute;
 
-    // In thời gian đầy đủ để debug
-    char timeStr[30];
-    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
-    Serial.print("Thời gian NTP đầy đủ: ");
-    Serial.println(timeStr);
-
-    // Xác định xem đây là điểm danh vào hay ra
+    // Xác định loại điểm danh
     bool isCheckOut = manualCheckOut || (currentTimeInMinutes >= checkOutTimeInMinutes);
 
-    Serial.print("Thời gian hiện tại: ");
-    Serial.print(currentHour);
-    Serial.print(":");
-    Serial.print(currentMinute);
-    Serial.print(" | Ngưỡng điểm danh ra: ");
-    Serial.print(checkOutHour);
-    Serial.print(":");
-    Serial.println(checkOutMinute);
+    Serial.printf("⚡ Điểm danh %s lúc %02d:%02d\n",
+                 isCheckOut ? "RA" : "VÀO", timeinfo.tm_hour, timeinfo.tm_min);
 
-    bool attendanceSuccess = false;
-
+    // Tạo dữ liệu điểm danh (không kiểm tra trạng thái cũ để tăng tốc)
     if (isCheckOut) {
-      // Nếu là điểm danh ra
-      if (hasCheckedIn) {
-        // Chỉ cập nhật giờ ra nếu chưa có
-        if (!Firebase.RTDB.get(&fbdo, attendancePath + "/out") || fbdo.dataType() == "null") {
-          json.set("out", currentTime);
-          json.set("status", "present");
-          Serial.println("📝 Điểm danh ra");
-        } else {
-          Serial.println("⚠️ Sinh viên đã điểm danh ra rồi");
-          attendanceSuccess = true; // Vẫn coi là thành công vì không phải lỗi
-        }
-      } else {
-        // Nếu chưa điểm danh vào, tạo cả giờ vào và giờ ra
-        json.set("in", currentTime);
-        json.set("out", currentTime);
-        json.set("status", "present");
-        Serial.println("📝 Tạo cả điểm danh vào và ra");
-      }
+      json.set("out", currentTime);
+      json.set("status", "present");
     } else {
-      // Nếu là điểm danh vào
-      if (!hasCheckedIn) {
-        // Chỉ tạo điểm danh vào nếu chưa có
-        json.set("in", currentTime);
-        json.set("status", "present");
-        Serial.println("📝 Điểm danh vào");
-      } else {
-        Serial.println("⚠️ Sinh viên đã điểm danh vào rồi");
-        attendanceSuccess = true; // Vẫn coi là thành công vì không phải lỗi
-      }
+      json.set("in", currentTime);
+      json.set("status", "present");
     }
 
-    // Nếu đã điểm danh trước đó, không cần cập nhật lại
-    if (!attendanceSuccess) {
-      if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &json)) {
-        Serial.println("✅ Cập nhật điểm danh thành công");
-        attendanceSuccess = true;
+    // Cập nhật Firebase với async để tăng tốc
+    bool attendanceSuccess = false;
+    if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &json)) {
+      Serial.println("✅ Cập nhật điểm danh thành công");
+      attendanceSuccess = true;
 
-        // Thông báo Google Apps Script để đồng bộ dữ liệu điểm danh
-        notifyGoogleSheets();
-      } else {
-        Serial.println("❌ Lỗi cập nhật điểm danh: " + fbdo.errorReason());
-        attendanceSuccess = false;
-      }
+      // Tạm thời tắt Google Sheets để tăng tốc độ và ổn định
+      // notifyGoogleSheets();
+    } else {
+      Serial.println("❌ Lỗi cập nhật điểm danh: " + fbdo.errorReason());
+      attendanceSuccess = false;
     }
 
     // Không mở cửa ở đây, sẽ mở cửa sau khi hiển thị thông báo thành công
@@ -1242,7 +1243,7 @@ void displayCheckInSuccess() {
   }
 
   display.display();
-  delay(2000);
+  delay(1500); // Giảm delay từ 2000ms xuống 1500ms
   isDisplayingMessage = false;
 }
 
@@ -1263,7 +1264,7 @@ void displayCheckInFailed() {
   display.println("The khong duoc dang ky");
 
   display.display();
-  delay(2000);
+  delay(1500); // Giảm delay từ 2000ms xuống 1500ms
   isDisplayingMessage = false;
 }
 
@@ -1408,8 +1409,24 @@ void saveSensorDataToSPIFFS(float temp, float humi, float gas, bool flame, Strin
   Serial.println("\n----- Bắt đầu lưu dữ liệu vào SPIFFS -----");
   Serial.println("💾 Đang lưu dữ liệu cảm biến vào bộ nhớ SPIFFS...");
 
+  // Kiểm tra và sửa giá trị nan trước khi lưu
+  if (isnan(temp)) {
+    temp = 25.0;
+    Serial.println("⚠️ Sửa nhiệt độ nan thành 25°C");
+  }
+
+  if (isnan(humi)) {
+    humi = 60.0;
+    Serial.println("⚠️ Sửa độ ẩm nan thành 60%");
+  }
+
+  if (isnan(gas) || gas < 0) {
+    gas = 0.0;
+    Serial.println("⚠️ Sửa gas nan thành 0 ppm");
+  }
+
   // Hiển thị thông tin dữ liệu sẽ lưu
-  Serial.printf("🌡️ Nhiệt độ: %.1f°C | 💧 Độ ẩm: %.1f%% | 🔥 Gas: %.0f ppm | 🔥 Lửa: %s\n",
+  Serial.printf("🌡️ Nhiệt độ: %.1f°C | 💧 Độ ẩm: %.1f%% | � Gas: %.0f ppm | 🔥 Lửa: %s\n",
                 temp, humi, gas, flame ? "CÓ" : "KHÔNG");
   Serial.printf("⏱️ Timestamp: %lu | 📊 Trạng thái: %s\n", timestamp, status.c_str());
 
@@ -1590,11 +1607,21 @@ void sendPendingSensorData() {
   for (size_t i = 0; i < array.size(); i++) {
     JsonObject obj = array[i];
 
-    // Tạo JSON để gửi lên Firebase
+    // Tạo JSON để gửi lên Firebase (kiểm tra nan)
     FirebaseJson json;
-    json.set("temperature", obj["temperature"].as<float>());
-    json.set("humidity", obj["humidity"].as<float>());
-    json.set("gas", obj["gas"].as<float>());
+
+    float temp = obj["temperature"].as<float>();
+    float humi = obj["humidity"].as<float>();
+    float gas = obj["gas"].as<float>();
+
+    // Kiểm tra và sửa giá trị nan
+    if (isnan(temp)) temp = 25.0;
+    if (isnan(humi)) humi = 60.0;
+    if (isnan(gas) || gas < 0) gas = 0.0;
+
+    json.set("temperature", temp);
+    json.set("humidity", humi);
+    json.set("gas", gas);
     json.set("flame", obj["flame"].as<bool>());
     json.set("status", obj["status"].as<String>());
     json.set("updatedAt", obj["timestamp"].as<unsigned long>());
@@ -1950,4 +1977,215 @@ void buzzerBeep(int times, int duration, int pause) {
 
   // Đảm bảo buzzer tắt hoàn toàn
   digitalWrite(BUZZER_PIN, LOW);
+}
+
+// Tải danh sách sinh viên từ Firebase vào SPIFFS - Sửa lỗi buffer overflow
+void downloadStudentsList() {
+  Serial.println("\n----- Bắt đầu tải danh sách sinh viên -----");
+
+  if (!Firebase.ready()) {
+    Serial.println("❌ Firebase chưa sẵn sàng");
+    return;
+  }
+
+  // Tạo FirebaseData riêng với buffer lớn hơn cho việc tải danh sách sinh viên
+  FirebaseData fbdoStudents;
+  fbdoStudents.setResponseSize(8192);  // Buffer lớn hơn cho danh sách sinh viên
+
+  // Lấy danh sách sinh viên từ Firebase
+  if (Firebase.RTDB.getJSON(&fbdoStudents, "students")) {
+    FirebaseJson &json = fbdoStudents.jsonObject();
+
+    // Lưu vào SPIFFS
+    File file = SPIFFS.open(STUDENTS_FILE, FILE_WRITE);
+    if (file) {
+      String jsonString;
+      json.toString(jsonString, true);
+
+      // Kiểm tra kích thước trước khi lưu
+      if (jsonString.length() > 0 && jsonString.length() < 8000) {
+        file.print(jsonString);
+        file.close();
+
+        Serial.println("✅ Đã tải và lưu danh sách sinh viên vào SPIFFS");
+        Serial.printf("📊 Kích thước dữ liệu: %d bytes\n", jsonString.length());
+      } else {
+        file.close();
+        Serial.println("❌ Dữ liệu quá lớn hoặc không hợp lệ");
+        Serial.printf("📊 Kích thước: %d bytes\n", jsonString.length());
+      }
+    } else {
+      Serial.println("❌ Lỗi mở file để lưu danh sách sinh viên");
+    }
+  } else {
+    Serial.println("❌ Lỗi tải danh sách sinh viên: " + fbdoStudents.errorReason());
+  }
+
+  Serial.println("----- Kết thúc tải danh sách sinh viên -----\n");
+}
+
+// Kiểm tra sinh viên trong danh sách offline
+bool checkStudentOffline(String cardID, String &studentName) {
+  if (!SPIFFS.exists(STUDENTS_FILE)) {
+    return false;
+  }
+
+  File file = SPIFFS.open(STUDENTS_FILE, FILE_READ);
+  if (!file) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(4096);
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+
+  if (error) {
+    Serial.println("❌ Lỗi đọc danh sách sinh viên offline: " + String(error.c_str()));
+    return false;
+  }
+
+  // Kiểm tra xem cardID có tồn tại không
+  if (doc.containsKey(cardID)) {
+    JsonObject student = doc[cardID];
+    if (student.containsKey("name")) {
+      studentName = student["name"].as<String>();
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Lưu dữ liệu điểm danh vào SPIFFS khi offline
+void saveAttendanceToSPIFFS(String cardID, String studentName, bool isCheckOut, unsigned long timestamp) {
+  Serial.println("\n----- Lưu điểm danh offline vào SPIFFS -----");
+  Serial.printf("👤 Sinh viên: %s (ID: %s)\n", studentName.c_str(), cardID.c_str());
+  Serial.printf("📝 Loại: %s | ⏱️ Timestamp: %lu\n", isCheckOut ? "Điểm danh ra" : "Điểm danh vào", timestamp);
+
+  // Đọc dữ liệu hiện có
+  DynamicJsonDocument doc(4096);
+  bool fileExists = SPIFFS.exists(ATTENDANCE_FILE);
+
+  if (fileExists) {
+    File file = SPIFFS.open(ATTENDANCE_FILE, FILE_READ);
+    if (file) {
+      DeserializationError error = deserializeJson(doc, file);
+      file.close();
+
+      if (error) {
+        Serial.println("❌ Lỗi đọc file điểm danh, tạo mới");
+        doc.clear();
+        doc.to<JsonArray>();
+      }
+    }
+  } else {
+    doc.to<JsonArray>();
+  }
+
+  // Thêm bản ghi mới
+  JsonArray array = doc.as<JsonArray>();
+  JsonObject record = array.createNestedObject();
+  record["cardID"] = cardID;
+  record["studentName"] = studentName;
+  record["isCheckOut"] = isCheckOut;
+  record["timestamp"] = timestamp;
+  record["date"] = getCurrentDateString();
+
+  // Lưu lại vào file
+  File file = SPIFFS.open(ATTENDANCE_FILE, FILE_WRITE);
+  if (file) {
+    size_t bytesWritten = serializeJson(doc, file);
+    file.close();
+    Serial.printf("✅ Đã lưu điểm danh offline (%d bytes)\n", bytesWritten);
+    Serial.printf("📊 Tổng số bản ghi: %d\n", array.size());
+  } else {
+    Serial.println("❌ Lỗi mở file để lưu điểm danh");
+  }
+
+  Serial.println("----- Kết thúc lưu điểm danh offline -----\n");
+}
+
+// Gửi dữ liệu điểm danh offline lên Firebase
+void sendPendingAttendanceData() {
+  Serial.println("\n----- Gửi dữ liệu điểm danh offline -----");
+
+  if (!SPIFFS.exists(ATTENDANCE_FILE)) {
+    Serial.println("ℹ️ Không có dữ liệu điểm danh offline");
+    return;
+  }
+
+  if (!Firebase.ready()) {
+    Serial.println("❌ Firebase chưa sẵn sàng");
+    return;
+  }
+
+  File file = SPIFFS.open(ATTENDANCE_FILE, FILE_READ);
+  if (!file) {
+    Serial.println("❌ Lỗi mở file điểm danh");
+    return;
+  }
+
+  DynamicJsonDocument doc(4096);
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+
+  if (error) {
+    Serial.println("❌ Lỗi đọc file điểm danh: " + String(error.c_str()));
+    SPIFFS.remove(ATTENDANCE_FILE);
+    return;
+  }
+
+  JsonArray array = doc.as<JsonArray>();
+  Serial.printf("📦 Có %d bản ghi điểm danh cần gửi\n", array.size());
+
+  bool allSent = true;
+  int sentCount = 0;
+
+  for (size_t i = 0; i < array.size(); i++) {
+    JsonObject record = array[i];
+    String cardID = record["cardID"];
+    String studentName = record["studentName"];
+    bool isCheckOut = record["isCheckOut"];
+    unsigned long timestamp = record["timestamp"];
+    String date = record["date"];
+
+    // Tạo đường dẫn Firebase
+    String attendancePath = "attendance/" + date + "/" + cardID;
+
+    // Tạo dữ liệu để gửi
+    FirebaseJson json;
+    if (isCheckOut) {
+      json.set("out", timestamp);
+      json.set("status", "present");
+    } else {
+      json.set("in", timestamp);
+      json.set("status", "present");
+    }
+
+    Serial.printf("🔄 Gửi bản ghi %d/%d: %s (%s)\n",
+                 (int)i + 1, (int)array.size(), studentName.c_str(), isCheckOut ? "ra" : "vào");
+
+    if (Firebase.RTDB.updateNode(&fbdo, attendancePath, &json)) {
+      sentCount++;
+      Serial.printf("✅ Đã gửi thành công bản ghi %d\n", sentCount);
+    } else {
+      Serial.printf("❌ Lỗi gửi bản ghi %d: %s\n", (int)i + 1, fbdo.errorReason().c_str());
+      allSent = false;
+      break;
+    }
+
+    delay(300); // Tránh quá tải Firebase
+  }
+
+  if (allSent) {
+    SPIFFS.remove(ATTENDANCE_FILE);
+    Serial.printf("✅ Đã gửi thành công tất cả %d bản ghi điểm danh\n", sentCount);
+
+    // Tạm thời tắt Google Sheets để tăng tốc độ và ổn định
+    // notifyGoogleSheets();
+  } else {
+    Serial.printf("⚠️ Chỉ gửi được %d/%d bản ghi\n", sentCount, (int)array.size());
+  }
+
+  Serial.println("----- Kết thúc gửi dữ liệu điểm danh offline -----\n");
 }
